@@ -1,0 +1,11 @@
+{
+  "display_name": "收藏插件1.0",
+  "loading_order": 18,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Your Name",
+  "version": "1.0.0",
+  "homePage": "https://github.com/yourusername/st-favorites"
+}

@@ -5,7 +5,7 @@
 //                      UPDATE CHECKER CONSTANTS & STATE
 // =================================================================
 const GITHUB_REPO = 'yuncengfeihou/star';
-const LOCAL_VERSION = '2.1.0';
+const LOCAL_VERSION = '2.0.3';
 const REMOTE_CHANGELOG_PATH = 'CHANGELOG.md';
 const REMOTE_MANIFEST_PATH = 'manifest.json';
 const REMOTE_UPDATE_NOTICE_PATH = 'update.html';
@@ -517,30 +517,14 @@ function showUsageGuidePopup() {
                 <li><strong>主题切换:</strong> 在收藏面板中，长按左上角的角色/群组头像，可以打开菜单切换亮/暗主题。</li>
                 <li><strong>更新插件:</strong> 当 "收藏" 按钮旁出现红色的 "可更新" 按钮时，代表插件有新版本。点击它即可查看更新日志并更新。</li>
             </ul>
-            <h4 style="margin-top: 20px;"><i class="fa-solid fa-video"></i> 视频示例</h4>
-            <ul style="list-style-type: none; padding-left: 0;">
-                
-                <!-- 新增的视频演示 1 -->
-                <li style="margin-bottom: 20px;">
-                    <p style="margin-bottom: 5px;"><strong>演示1：基本收藏、备注与面板操作</strong></p>
-                    <video width="100%" controls preload="metadata" playsinline>
-                        <source src="https://files.catbox.moe/pbcyff.mp4" type="video/mp4">
-                        您的浏览器不支持视频播放。
-                    </video>
-                </li>
-
-                <!-- 新增的视频演示 2 -->
-                <li style="margin-bottom: 15px;">
-                    <p style="margin-bottom: 5px;"><strong>演示2：主题切换与插件更新</strong></p>
-                    <video width="100%" controls preload="metadata" playsinline>
-                        <source src="https://files.catbox.moe/h5whl9.mp4" type="video/mp4">
-                        您的浏览器不支持视频播放。
-                    </video>
-                </li>
+            <h4><i class="fa-solid fa-circle-info"></i> 视频示例</h4>
+            <ul>
+                <li><strong>主题切换:</strong> 在收藏面板中，长按左上角的角色/群组头像，可以打开菜单切换亮/暗主题。</li>
+                <li><strong>问题反馈:</strong> 如果有任何问题或建议可以直接在旅程检索“聊天收藏器”进入帖子进行反馈！</li>
             </ul>
         </div>
     `;
-	
+    
     // THE FIX IS HERE: Added 'cancelButton: false'
     callGenericPopup(guideHtml, 'html', { 
         okButton: '关闭', 
@@ -583,40 +567,45 @@ function ensureModalStructure() {
     // --- Event Listeners ---
     modalElement.querySelector(`.${MODAL_CLOSE_X_CLASS}`).addEventListener('click', closeFavoritesModal);
 
-    // --- MODIFIED: Sidebar Toggle & Long-press Options Menu (with Touch Support) ---
-    const avatarToggle = modalElement.querySelector(`.${SIDEBAR_TOGGLE_CLASS}`);
-    let longPressTimer;
-    let isLongPressAction = false;
+	// --- MODIFIED: Sidebar Toggle & Long-press Options Menu (with Touch Support) ---
+	const avatarToggle = modalElement.querySelector(`.${SIDEBAR_TOGGLE_CLASS}`);
+	let longPressTimer;
+	let isLongPressAction = false;
 
-    const startPress = (e) => {
-        isLongPressAction = false;
-        longPressTimer = setTimeout(() => {
-            isLongPressAction = true;
-            showAvatarLongPressMenu();
-        }, 600); // 600ms for long press
-    };
+	const startPress = (e) => {
+		// 立即阻止默认行为，防止移动端浏览器弹出图片上下文菜单
+		e.preventDefault(); 
+		
+		isLongPressAction = false;
+		longPressTimer = setTimeout(() => {
+			isLongPressAction = true;
+			showAvatarLongPressMenu();
+		}, 600); // 600ms for long press
+	};
 
-    const endPress = () => {
-        clearTimeout(longPressTimer);
-    };
+	const endPress = (e) => {
+		// 在结束时也阻止一下，以防万一
+		e.preventDefault();
+		clearTimeout(longPressTimer);
+	};
 
-    // Bind events for both mouse and touch
-    avatarToggle.addEventListener('mousedown', startPress);
-    avatarToggle.addEventListener('touchstart', startPress, { passive: true });
+	// Bind events for both mouse and touch
+	avatarToggle.addEventListener('mousedown', startPress);
+	avatarToggle.addEventListener('touchstart', startPress); // <-- 移除了 { passive: true }
 
-    avatarToggle.addEventListener('mouseup', endPress);
-    avatarToggle.addEventListener('mouseleave', endPress);
-    avatarToggle.addEventListener('touchend', endPress);
-    avatarToggle.addEventListener('touchcancel', endPress);
+	avatarToggle.addEventListener('mouseup', endPress);
+	avatarToggle.addEventListener('mouseleave', endPress); // mouseleave 也应该清除计时器
+	avatarToggle.addEventListener('touchend', endPress);
+	avatarToggle.addEventListener('touchcancel', endPress);
 
-    avatarToggle.addEventListener('click', (e) => {
-        if (isLongPressAction) {
-            e.preventDefault();
-            e.stopPropagation();
-            return; // Prevent sidebar toggle if it was a long press
-        }
-        modalDialogElement.classList.toggle('sidebar-closed');
-    });
+	avatarToggle.addEventListener('click', (e) => {
+		if (isLongPressAction) {
+			e.preventDefault();
+			e.stopPropagation();
+			return; // Prevent sidebar toggle if it was a long press
+		}
+		modalDialogElement.classList.toggle('sidebar-closed');
+	});
 
     const searchContainer = modalElement.querySelector(`.${SEARCH_CONTAINER_CLASS}`);
     const searchIcon = modalElement.querySelector(`.${SEARCH_ICON_CLASS}`);
@@ -1156,6 +1145,49 @@ function renderIframesInElement($container) {
 // =================================================================
 //        CORE LOGIC FUNCTIONS
 // =================================================================
+/**
+ * NEW: Ensures the currently active chat is in the `allChatsFavoritesData` cache.
+ * This prevents the "chat cache not found" error when favoriting before opening the modal.
+ * It uses the readily available data from getContext() for instant caching.
+ */
+function ensureCurrentChatIsCached() {
+    try {
+        const context = getContext();
+        if (!context || !context.chatId) return; // Not in a chat
+
+        const currentContextChatIdNoExt = String(context.chatId).replace('.jsonl', '');
+        
+        // Check if it's already cached
+        const isAlreadyCached = allChatsFavoritesData.some(
+            chatData => String(chatData.fileName).replace('.jsonl', '') === currentContextChatIdNoExt
+        );
+
+        if (isAlreadyCached) {
+            return; // Already in cache, do nothing
+        }
+
+        // If not cached, create an entry using data from getContext()
+        const currentChatMetadata = ensureFavoritesArrayExists() || { favorites: [] };
+        
+        const newCacheEntry = {
+            fileName: currentContextChatIdNoExt,
+            displayName: currentContextChatIdNoExt, // Can be refined later if needed
+            metadata: currentChatMetadata,
+            favorites: currentChatMetadata.favorites || [],
+            messages: context.chat || [],
+            isGroup: !!context.groupId,
+            characterId: context.characterId,
+            groupId: context.groupId,
+        };
+        
+        allChatsFavoritesData.push(newCacheEntry);
+        console.log(`[${pluginName}] Cached data for new chat: ${currentContextChatIdNoExt}`);
+
+    } catch (error) {
+        console.error(`[${pluginName}] Failed to cache current chat:`, error);
+    }
+}
+
 function ensureFavoritesArrayExists() {
     let context;
     try {
@@ -1322,39 +1354,47 @@ function removeFavoriteById(favoriteId, targetChatFile = null) {
     return false;
 }
 
+/**
+ * REFACTORED: Updates a favorite's note, following the single-source-of-truth principle.
+ * It directly modifies the item in the cache and then saves it.
+ */
 function updateFavoriteNote(favoriteId, note, targetChatFile = null) {
     const context = getContext();
     const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
-    const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl','') : (currentViewingChatFile || currentContextChatIdNoExt);
-    if (!chatFileToModify) return;
-    let metadataToUpdate;
-    let messagesToUpdate = null;
-    if (chatFileToModify === currentContextChatIdNoExt) {
-        const globalChatMetadata = ensureFavoritesArrayExists();
-        if (!globalChatMetadata) return;
-        metadataToUpdate = globalChatMetadata;
-        messagesToUpdate = context.chat;
-    } else if (allChatsFavoritesData.length > 0) {
-        const chatData = allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl','') === chatFileToModify);
-        if (chatData && chatData.metadata) {
-            metadataToUpdate = JSON.parse(JSON.stringify(chatData.metadata));
-            messagesToUpdate = chatData.messages;
-        }
-    }
-    if (!metadataToUpdate || !Array.isArray(metadataToUpdate.favorites)) return;
-    const favorite = metadataToUpdate.favorites.find(fav => fav.id === favoriteId);
-    if (favorite) {
-        favorite.note = note;
-        const chatDataInCache = allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
-        if (chatDataInCache) {
-            const favInCache = chatDataInCache.metadata.favorites.find(fav => fav.id === favoriteId);
-            if (favInCache) favInCache.note = note;
-        }
+    const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : (currentViewingChatFile || currentContextChatIdNoExt);
 
+    if (!chatFileToModify) {
+        console.error(`[${pluginName}] updateFavoriteNote - Cannot determine target chat file.`);
+        return;
+    }
+
+    // Find the single source of truth: our cache.
+    const chatDataInCache = allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
+
+    if (!chatDataInCache || !Array.isArray(chatDataInCache.metadata.favorites)) {
+        console.error(`[${pluginName}] updateFavoriteNote - Chat data for "${chatFileToModify}" or its favorites array not found.`);
+        return;
+    }
+
+    const favoriteToUpdate = chatDataInCache.metadata.favorites.find(fav => fav.id === favoriteId);
+
+    if (favoriteToUpdate) {
+        // Modify the note directly in the cache object
+        favoriteToUpdate.note = note;
+
+        // Propagate the change
         if (chatFileToModify === currentContextChatIdNoExt) {
+            // Sync with the live context metadata for the main chat UI
+            context.chatMetadata.favorites = chatDataInCache.metadata.favorites;
             saveMetadataDebounced();
         } else {
-            saveSpecificChatMetadata(chatFileToModify, metadataToUpdate, messagesToUpdate);
+            // Save to the specific chat file on the backend
+            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, chatDataInCache.messages);
+        }
+
+        // If the modal is open and viewing the affected chat, re-render it
+        if (modalElement && modalElement.style.display === 'block' && currentViewingChatFile === chatFileToModify) {
+            renderFavoritesView(currentViewingChatFile);
         }
     }
 }
@@ -1950,9 +1990,10 @@ async function enterPreviewMode(messageId, chatFileNoExt) {
     const endIndex = Math.min(messagesArray.length, startIndex + totalMessagesToShow);
     const contextMessages = messagesArray.slice(startIndex, endIndex);
 
-    $('#send_form').hide();
+    // --- MODIFIED LOGIC: Use a class to control the state ---
+    $('#form_sheld').addClass('star-preview-active');
+    
     if (previewToggleElement) previewToggleElement.style.display = 'flex';
-	if (previewExitButtonElement) previewExitButtonElement.style.display = 'flex';
 	$('#top-bar').hide();
 	$('#top-settings-holder').hide();
     
@@ -1980,9 +2021,10 @@ async function exitPreviewMode() {
     if (!isPreviewingContext) return;
     
     if (previewToggleElement) previewToggleElement.style.display = 'none';
-    if (previewExitButtonElement) previewExitButtonElement.style.display = 'none';
     
-    $('#send_form').css('display', 'flex');
+    // --- MODIFIED LOGIC: Just remove the class, CSS will do the rest ---
+    $('#form_sheld').removeClass('star-preview-active');
+    
     $('#top-bar').css('display', 'flex');
     $('#top-settings-holder').css('display', 'flex');
 
@@ -2001,13 +2043,23 @@ function setupPreviewModeUI() {
         document.body.appendChild(previewToggleElement);
     }
     
+    // --- MODIFIED LOGIC ---
+    // 寻找正确的挂载点
+    const formSheld = document.getElementById('form_sheld');
+    if (!formSheld) {
+        console.error('[star] #form_sheld not found! Cannot attach exit preview button.');
+        return;
+    }
+
     if (!document.getElementById(PREVIEW_EXIT_BUTTON_ID)) {
         previewExitButtonElement = document.createElement('button');
         previewExitButtonElement.id = PREVIEW_EXIT_BUTTON_ID;
         previewExitButtonElement.className = 'menu_button';
         previewExitButtonElement.textContent = '结束预览';
         previewExitButtonElement.addEventListener('click', exitPreviewMode);
-        document.body.appendChild(previewExitButtonElement);
+        
+        // **将按钮添加到 #form_sheld 而不是 body**
+        formSheld.appendChild(previewExitButtonElement);
     }
 }
 
@@ -2016,6 +2068,8 @@ function setupPreviewModeUI() {
 // =================================================================
 jQuery(async () => {
     try {
+    
+        $('#form_sheld').removeClass('star-preview-active');
         if (!extension_settings[pluginName].lastSeenVersion) {
             extension_settings[pluginName].lastSeenVersion = '0.0.0';
         }
@@ -2039,25 +2093,36 @@ jQuery(async () => {
 
         let longPressTimeout;
         let isLongPress = false;
-        $(document)
-            .on('mousedown', '.favorite-toggle-icon', (event) => {
-                isLongPress = false;
-                longPressTimeout = setTimeout(() => {
-                    isLongPress = true;
-                    event.preventDefault();
-                    handleEditNoteFromChat(event.currentTarget);
-                }, 600);
-            })
-            .on('mouseup mouseleave touchend', '.favorite-toggle-icon', () => {
-                clearTimeout(longPressTimeout);
-            })
-            .on('click', '.favorite-toggle-icon', (event) => {
-                if (!isLongPress) {
-                    handleFavoriteToggle(event);
-                }
-            });
+		$(document)
+			.on('mousedown touchstart', '.favorite-toggle-icon', function(event) { // <-- 同时监听 mousedown 和 touchstart
+				// 阻止默认行为，如在触摸时滚动页面
+				// 注意：在jQuery的事件委托中，event.originalEvent 用于访问原生事件
+				if (event.type === 'touchstart') {
+					event.preventDefault();
+				}
+				
+				const self = this; // 保存当前元素引用
+				isLongPress = false;
+				longPressTimeout = setTimeout(() => {
+					isLongPress = true;
+					handleEditNoteFromChat(self); // 使用保存的引用
+				}, 600);
+			})
+			.on('mouseup mouseleave touchend touchcancel', '.favorite-toggle-icon', () => { // <-- 增加 touchcancel
+				clearTimeout(longPressTimeout);
+			})
+			.on('click', '.favorite-toggle-icon', (event) => {
+				if (isLongPress) {
+					event.preventDefault(); // 阻止长按后触发的单击事件
+					event.stopPropagation();
+				} else {
+					handleFavoriteToggle(event);
+				}
+			});
         
         ensureFavoritesArrayExists();
+        ensureCurrentChatIsCached();
+        
         addFavoriteIconsToMessages();
         refreshFavoriteIconsInView();
 
@@ -2065,7 +2130,11 @@ jQuery(async () => {
 
         eventSource.on(event_types.CHAT_CHANGED, () => {
             if (isPreviewingContext) exitPreviewMode();
+            
+            // --- FIX: Cache on Chat Change ---
             ensureFavoritesArrayExists();
+            ensureCurrentChatIsCached();
+            
             setTimeout(() => {
                 addFavoriteIconsToMessages();
                 refreshFavoriteIconsInView();

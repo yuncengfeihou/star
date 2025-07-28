@@ -277,31 +277,29 @@ function markUpdateAsSeen() {
 
 /**
  * 在收藏夹模态框中显示更新日志。
+ * (已重写逻辑：不再显示CHANGELOG，而是直接获取并显示 update.html 的内容)
  */
 async function displayUpdateNoticeInModal() {
     const noticeEl = favDoc.getElementById('favorites_update_notice');
     if (!noticeEl) return;
 
     try {
-        // 如果 changelogForModal 为空（例如页面刷新后），则重新获取
-        if (!changelogForModal) {
-            const hash = await getLatestCommitHash();
-            const fullLog = await getRemoteFileContent(REMOTE_CHANGELOG_PATH, hash);
-            changelogForModal = extractRelevantChangelog(fullLog, extension_settings[pluginName].lastSeenVersion, LOCAL_VERSION);
-        }
+        // 新逻辑：直接获取远程的 update.html 文件内容
+        // 注意：我们仍然需要最新的 commit hash 来确保获取的是最新版本的文件，防止CDN缓存问题。
+        const hash = await getLatestCommitHash();
+        const updateNoticeHtml = await getRemoteFileContent(REMOTE_UPDATE_NOTICE_PATH, hash);
 
-        const logHtml = changelogForModal.replace(/### (.*)/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
-
+        // 将获取到的HTML直接注入到通知区域
         noticeEl.innerHTML = `
             <div style="border: 1px solid #4a9eff; background: rgba(74, 158, 255, 0.1); padding: 15px; margin: 10px; border-radius: 8px;">
-                <h4 style="margin-top:0; color:#4a9eff;">Star 插件已更新至 v${LOCAL_VERSION}</h4>
-                <div style="max-height: 200px; overflow-y: auto;">${logHtml}</div>
+                <div style="max-height: 200px; overflow-y: auto;">${updateNoticeHtml}</div>
                 <p style="font-size: 0.8em; color: #888; text-align: center; margin-top: 10px;">此消息仅显示一次。</p>
             </div>
         `;
         noticeEl.style.display = 'block';
     } catch (error) {
-        console.error(`[${pluginName}] Failed to display update notice:`, error);
+        console.error(`[${pluginName}] Failed to display update notice from update.html:`, error);
+        // 如果获取失败，则不显示任何内容，避免出错
         noticeEl.style.display = 'none';
     }
 }

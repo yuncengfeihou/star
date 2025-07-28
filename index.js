@@ -8,6 +8,7 @@ const GITHUB_REPO = 'yuncengfeihou/star';
 const LOCAL_VERSION = '2.0.6';
 const REMOTE_CHANGELOG_PATH = 'CHANGELOG.md';
 const REMOTE_MANIFEST_PATH = 'manifest.json';
+const REMOTE_UPDATE_NOTICE_PATH = 'update.html';
 
 let remoteVersion = '0.0.0';
 let latestCommitHash = '';

@@ -197,7 +197,16 @@ async function handleUpdate() {
         // 将日志保存到变量，以便更新后在模态框中显示
         changelogForModal = relevantLog;
 
-        const logHtml = relevantLog.replace(/### (.*)/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        // --- 修复点 1：使用 marked.js 渲染Markdown ---
+        let logHtml;
+        if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+            // 使用专业的 Markdown 解析器
+            logHtml = marked.parse(relevantLog);
+        } else {
+            // 如果 marked.js 不可用，则回退到基础渲染
+            console.warn('[star] marked.js not found. Falling back to basic formatting for changelog.');
+            logHtml = relevantLog.replace(/### (.*)/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        }
 
         const popupResult = await callGenericPopup(
             `<h3>发现新版本: ${remoteVersion}</h3><hr><div style="text-align:left; max-height: 300px; overflow-y: auto;">${logHtml}</div>`,
@@ -218,7 +227,7 @@ async function handleUpdate() {
             method: "POST",
             headers: getRequestHeaders(),
             body: JSON.stringify({
-                extensionName: pluginName, // 后端API v2 使用 'extension' 键
+                extension: pluginName, // 后端API v2 使用 'extension' 键
                 global: true, // 假设这是一个全局插件
             })
         });

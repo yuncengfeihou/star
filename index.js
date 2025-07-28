@@ -517,14 +517,30 @@ function showUsageGuidePopup() {
                 <li><strong>主题切换:</strong> 在收藏面板中，长按左上角的角色/群组头像，可以打开菜单切换亮/暗主题。</li>
                 <li><strong>更新插件:</strong> 当 "收藏" 按钮旁出现红色的 "可更新" 按钮时，代表插件有新版本。点击它即可查看更新日志并更新。</li>
             </ul>
-            <h4><i class="fa-solid fa-circle-info"></i> 视频示例</h4>
-            <ul>
-                <li><strong>主题切换:</strong> 在收藏面板中，长按左上角的角色/群组头像，可以打开菜单切换亮/暗主题。</li>
-                <li><strong>问题反馈:</strong> 如果有任何问题或建议可以直接在旅程检索“聊天收藏器”进入帖子进行反馈！</li>
+            <h4 style="margin-top: 20px;"><i class="fa-solid fa-video"></i> 视频示例</h4>
+            <ul style="list-style-type: none; padding-left: 0;">
+                
+                <!-- 新增的视频演示 1 -->
+                <li style="margin-bottom: 20px;">
+                    <p style="margin-bottom: 5px;"><strong>演示1：基本收藏、备注与面板操作</strong></p>
+                    <video width="100%" controls preload="metadata" playsinline>
+                        <source src="https://files.catbox.moe/pbcyff.mp4" type="video/mp4">
+                        您的浏览器不支持视频播放。
+                    </video>
+                </li>
+
+                <!-- 新增的视频演示 2 -->
+                <li style="margin-bottom: 15px;">
+                    <p style="margin-bottom: 5px;"><strong>演示2：主题切换与插件更新</strong></p>
+                    <video width="100%" controls preload="metadata" playsinline>
+                        <source src="https://files.catbox.moe/h5whl9.mp4" type="video/mp4">
+                        您的浏览器不支持视频播放。
+                    </video>
+                </li>
             </ul>
         </div>
     `;
-    
+	
     // THE FIX IS HERE: Added 'cancelButton: false'
     callGenericPopup(guideHtml, 'html', { 
         okButton: '关闭', 

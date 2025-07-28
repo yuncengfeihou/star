@@ -227,7 +227,7 @@ async function handleUpdate() {
             method: "POST",
             headers: getRequestHeaders(),
             body: JSON.stringify({
-                extension: pluginName, // 后端API v2 使用 'extension' 键
+                extensionName: pluginName, // 后端API v2 使用 'extension' 键
                 global: true, // 假设这是一个全局插件
             })
         });

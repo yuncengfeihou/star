@@ -1,0 +1,13 @@
+# pi 工作痕迹
+.pi/
+.playwright-mcp/
+
+# 依赖
+node_modules/
+
+# 截图库完整源码（开发参考，运行时仅使用 lib/modern-screenshot.js）
+lib/modern-screenshot-4.7.0/
+
+# 系统文件
+.DS_Store
+Thumbs.db

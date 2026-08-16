@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### 🚀 性能优化 (Performance)
+
+1.  **截图提速 7~8 倍**：重构截图字体处理流程，借鉴 scane2 的字体子集化方案。
+    *   **根因**：原方案依赖 modern-screenshot 库的全量字体嵌入，在遇到子集化字体 CSS（如泽语 BabelStone Han 的 403 个 `@font-face`）时会全量下载，单条消息截图耗时 7+ 秒。
+    *   **方案**：新增 `ui/font-subset.js` 模块接管字体处理——关闭库字体嵌入（`font: false`），按本次截图的实际文本精确匹配 `unicode-range`，只下载命中的少数子集文件，并通过 `onCreateForeignObjectSvg` 注入 SVG。
+    *   **效果**（实测）：单条 7453ms → 1017ms（首次含下载）/ 901ms（缓存）；多消息 3 条 ~22s → 2678ms。字体几乎无损（与原图像素差异仅 0.069%）。
+2.  **资源三级缓存**：新增 `worker.js`（Web Worker 并行下载）+ IndexedDB 持久缓存 + 内存缓存。字体文件、图片跨会话复用，二次截图近乎零网络。
+3.  **图片跨域处理**：新增 `customImageFetchFn`，聊天中的外链图片经三级缓存转 dataURL，跨域失败时优雅回退占位图。
+
 ## [2.2.0] - 2025-11-6
 
 ### 🚀 优化 (Optimization)

@@ -1,104 +1,28 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>收藏插件更新</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 10px 20px;
-            color: #333;
-        }
-        .dark-theme body {
-             color: #ddd;
-        }
-        h2 {
-            text-align: center;
-            color: #4a9eff;
-            border-bottom: 2px solid #4a9eff;
-            padding-bottom: 10px;
-            margin-top: 0;
-        }
-        h4 {
-            color: #007bff;
-            margin-top: 25px;
-            margin-bottom: 10px;
-        }
-        .dark-theme h4 {
-            color: #58a6ff;
-        }
-        ul {
-            list-style-type: none;
-            padding-left: 5px;
-        }
-        li {
-            margin-bottom: 12px;
-            display: flex;
-            align-items: flex-start;
-        }
-        li i {
-            margin-right: 12px;
-            margin-top: 5px;
-            width: 20px;
-            text-align: center;
-            color: #555;
-        }
-        .dark-theme li i {
-            color: #aaa;
-        }
-        strong {
-            color: #111;
-        }
-        .dark-theme strong {
-            color: #fff;
-        }
-        code {
-            background-color: rgba(0,0,0,0.05);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: "Courier New", Courier, monospace;
-        }
-        .dark-theme code {
-             background-color: rgba(255,255,255,0.1);
-        }
-        .footer-note {
-            text-align: center;
-            font-size: 0.85em;
-            color: #888;
-            margin-top: 30px;
-            padding-top: 10px;
-            border-top: 1px solid #eee;
-        }
-        .dark-theme .footer-note {
-             border-top-color: #444;
-        }
-    </style>
-</head>
-<body>
-    <h2>聊天收藏器已更新至 v2.2.0 🎉</h2>
-    <p>本次更新带来了多项重要的优化、修复与功能调整，旨在提升您的浏览效率和操作体验。</p>
-
-    <h4><i class="fa-solid fa-sliders"></i> 体验优化与调整</h4>
-    <ul>
-        <li><i class="fa-solid fa-pager"></i><strong>分页功能重塑：</strong>重新设计了底部的分页组件！现在它不仅能自适应主题颜色，加载更流畅，还加入了便捷的<strong>快速跳转</strong>功能——只需双击当前页码，即可输入目标页数直接跳转。</li>
-        <li><i class="fa-solid fa-list-ol"></i><strong>浏览效率提升：</strong>每页默认显示的收藏数量从5条增加至10条。同时，在设置页面新增了“修改显示收藏数”选项，您可以根据习惯自由调整。</li>
-        <li><i class="fa-solid fa-palette"></i><strong>视觉区分优化：</strong>在暗色主题的“查看上下文”窗口中，将用户消息气泡框的背景色调整为更具辨识度的紫罗兰色，对话脉络一目了然。</li>
-        <li><i class="fa-solid fa-database"></i><strong>稳定性增强：</strong>优化了内部缓存机制，解决了在某些特殊操作后可能出现“该收藏被删除或不存在”的错误提示问题。</li>
-        <li><i class="fa-solid fa-thumbtack"></i><strong>图标定位修复：</strong>修复了在暗色主题下，预览模式右侧的 <i class="fa-solid fa-eye"></i> 图标在滚动时位置不固定的问题，确保随时可以轻松点击。</li>
-    </ul>
-
-    <h4><i class="fa-solid fa-bug-slash"></i> 问题修复</h4>
-    <ul>
-        <li><i class="fa-solid fa-gears"></i>修复了在设置页面中，“修改上下文数量”选项设置后不生效的问题。现在您可以精确控制上下文的显示条数了。</li>
-        <li><i class="fa-solid fa-keyboard"></i>修复了当设置页面打开时，按 <code>Esc</code> 键会错误关闭整个收藏面板的BUG。现在它会如预期一样，仅关闭设置页面。</li>
-    </ul>
-    
-    <div class="footer-note">
-        <strong>点击左上角头像是打开/关闭侧边栏，而长摁左上角头像是切换主题UI或者查看使用说明，可别忘记哦！</strong>如果有任何问题，可以直接在旅程检索“聊天收藏器”来帖子下反馈！(此消息仅在更新后显示一次,关闭这次收藏面板后将不再显示。祝您使用愉快！)
+<div class="star-update-wrapper">
+  <div class="star-update-head">
+    <div class="star-update-version-line">
+      <span class="star-update-dot"></span>
+      v2.2.0
     </div>
-</body>
-</html>
+    <p class="star-update-sub">收藏插件最近更新了以下内容：</p>
+  </div>
+
+  <div class="star-update-section">
+    <div class="star-update-label">体验优化</div>
+    <ul class="star-update-list">
+      <li>分页组件重做，<b>双击页码可输入跳转</b></li>
+      <li>每页收藏数默认改为 10 条，可在设置里调整</li>
+      <li>暗色主题下，上下文查看的用户气泡改成紫色，更好分辨</li>
+      <li>缓存逻辑修了，不再偶尔弹「该收藏不存在」</li>
+      <li>预览模式的图标在暗色主题下不会滚没了</li>
+    </ul>
+  </div>
+
+  <div class="star-update-section">
+    <div class="star-update-label">修了俩 bug</div>
+    <ul class="star-update-list">
+      <li>设置里的「上下文数量」改了不生效，现在好了</li>
+      <li>设置页开着的时候按 Esc 会把整个收藏面板关了，现在只关设置页</li>
+    </ul>
+  </div>
+</div>

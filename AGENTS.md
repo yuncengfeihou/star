@@ -14,24 +14,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. **样式隔离** - 所有样式使用 `star` 前缀，避免污染 SillyTavern 宿主环境
 5. **用户体验优先** - 支持长按、快捷键、预览模式、截图等便捷操作
 
-## 代码架构
+## 目录结构
 
-模块化架构，职责分离：
+```
+star/
+├── AGENTS.md              # 项目开发指南（架构说明、代码规范、注意事项）
+├── manifest.json          # 插件清单 v2.2.0
+├── index.js               # 主入口（9KB）：初始化、事件监听、内联收藏按钮
+├── state.js               # 全局状态 + 默认设置
+├── Logger.js              # 统一日志（级别控制 + 内存历史 + 导出）
+├── core.js                # 收藏增删改查核心逻辑（553 行）
+├── api.js                 # 后端交互：更新检查/数据加载/元数据保存（945 行）
+├── worker.js              # modern-screenshot 的 Web Worker（压缩版，资源并行下载）
+├── style.css              # 全部样式（3042 行，star 前缀 + CSS 变量主题）
+├── update.html            # 更新通知内容模板
+├── .gitignore             # 忽略 .pi/、.playwright-mcp/、.codegraph/、node_modules/、modern-screenshot-4.7.0/
+├── lib/                   # 第三方库
+│   ├── modern-screenshot.js       # 截图库本地副本（29KB，运行时使用）
+│   └── modern-screenshot-4.7.0/   # 该库完整源码仓库（开发参考，已 gitignore）
+└── ui/                    # UI 模块化目录（10 个模块，见下方 UI 模块索引）
+```
 
-- **index.js** - 主入口，初始化插件，绑定 SillyTavern 核心事件监听器，内联收藏按钮模板
-- **state.js** - 全局状态和插件设置管理
-- **Logger.js** - 统一日志管理，支持日志级别、内存历史与导出
-- **core.js** - 收藏的增删改查核心逻辑（直接读写 `msg.swipe_info.star_favorite`）
-- **api.js** - 后端 API 交互（聊天数据获取、元数据保存、更新检查、跨角色扫描）
-- **worker.js** - Web Worker（压缩版），截图时并行下载图片/字体资源，避免阻塞主线程
-- **ui/** - UI 层模块化目录（10 个模块，见下方 UI 层架构）
-- **style.css** - 完整样式（3042 行），使用 CSS 变量支持亮/暗主题
-- **input_button.html** - 收藏按钮入口模板（用于注册进魔法棒面板）
-- **update.html** - 更新通知内容模板
-- **settings_display.html** - 占位空文件
-- **lib/** - 第三方库
-  - **modern-screenshot.js** - 截图库本地副本（CDN 兜底：unpkg 4.7.0）
-  - **modern-screenshot-4.7.0/** - 该库完整源码仓库（开发参考用）
+## UI 模块索引
+
+| 模块 | 行数 | 职责 | 关键导出 |
+|---|---|---|---|
+| `main.js` | 1174 | 核心面板：模态框、侧栏、搜索、分页、聊天列表、收藏项渲染、移动端操作菜单 | `openFavoritesModal` `renderFavoritesView` `handleFavoriteToggle` `switchToCharacter` |
+| `components.js` | 400 | 通用弹窗组件（确认/输入/文本/编辑器） | `showConfirmModal` `showInputModal` `showTextModal` `showEditorModal` |
+| `preview.js` | 802 | 预览模式：主聊天区查看历史消息上下文 | `enterPreviewMode` `exitPreviewMode` `handleViewContext` |
+| `settings.js` | 1252 | 设置：主题切换、头像长按菜单、上下文范围/分页设置、使用指南、截图设置 | `toggleTheme` `applySavedTheme` `showAvatarLongPressMenu` |
+| `screenshot.js` | 785 | 截图：选择弹窗、多消息截图、元素截图 | `captureScreenshotMessages` `captureElementScreenshot` |
+| `font-subset.js` | 938 | 字体子集化：接管截图字体处理，三级缓存（内存/IndexedDB/Worker），截图提速 7~8 倍 | `initFontSystem` `buildSvgFontCss` `customImageFetchFn` |
+| `debug.js` | 322 | 调试日志面板（浮动按钮 + 日志弹窗 + 级别筛选 + 导出） | `initDebugPanel` `toggleDebugPanel` |
+| `character-switcher.js` | 407 | 跨角色收藏切换器（底部抽屉，扫描有收藏的角色） | `openCharacterSwitcher` `preloadCharacterFavorites` |
+| `qa.js` | 1048 | AI 答疑面板（流式传输、自定义 API、思维链渲染） | `ensureQAStructure` `openQAPanel` |
+| `index.js` | 9 | Barrel 文件，统一导出全部 UI 模块 | — |
+
+## 核心模块职责
+
+- **core.js**：收藏 CRUD。数据直接读写 `message.swipe_info[swipeId].star_favorite`，UI 层通过 `buildVirtualFavorites(messages)` 动态构建虚拟收藏数组（同一消息可收藏多个 swipe）。提供 `addFavorite` `removeFavoriteById` `updateFavoriteNote` `handleEditNoteFromChat`（长按 600ms）等。
+- **api.js**：`checkForUpdates`/`handleUpdate`（GitHub raw 源）、`getAllChatFavoritesForCurrentContext`（后台异步加载其他聊天）、`getFullChatData`、`saveSpecificChatMetadata`、`scanAllCharactersForFavorites`、`isAbortError`（AbortController 取消判断）。
+- **index.js** 事件监听：`CHAT_CHANGED` `MESSAGE_DELETED/RECEIVED/SENT/SWIPED/UPDATED` `MORE_MESSAGES_LOADED` + MutationObserver 监控聊天区，均有 150ms 防抖。
 
 ## 关键设计概念
 
@@ -92,19 +115,17 @@ UI 层通过 `buildVirtualFavorites(messages)` 从消息数组动态构建虚拟
 ### 调试日志面板
 `ui/debug.js`：浮动按钮 + 日志弹窗，读取 `Logger.logHistory`，支持级别筛选、下载、清空、主题适配。
 
-### UI 层架构
-UI 层采用模块化设计，各司其职：
+## 当前状态
 
-- **main.js** - 核心面板渲染与主逻辑（模态框、侧栏、搜索过滤、分页、收藏项渲染、移动端操作菜单）
-- **components.js** - 通用弹窗组件（确认/输入/文本/编辑器对话框），保持代码复用
-- **preview.js** - 预览模式逻辑，包括进入/退出预览、上下文查看
-- **settings.js** - 设置相关（主题切换、头像长按菜单、上下文范围/分页设置、使用指南、截图设置）
-- **screenshot.js** - 截图功能（选择弹窗、多消息截图、元素截图）
-- **font-subset.js** - 字体子集化（截图字体映射构建、IndexedDB 缓存、SVG 字体注入）
-- **debug.js** - 调试日志面板
-- **character-switcher.js** - 跨角色收藏切换器
-- **qa.js** - AI 答疑面板
-- **index.js** - 统一导出模块（Barrel File），简化导入路径
+- **版本**：v2.2.0（manifest / state / update.html 一致）；CHANGELOG 有 `[Unreleased]` 段（截图提速、三级缓存、图片跨域）尚未发版。
+- **Git**：`origin` = `https://github.com/yuncengfeihou/star.git`（内测仓库，main）。最新提交 `e8b8c19`（初始化项目基线，纳入全部核心模块），远程已同步。
+- **依赖**：运行时仅用 `lib/modern-screenshot.js`（CDN 兜底 unpkg 4.7.0）；`lib/modern-screenshot-4.7.0/` 为源码参考，不入库。
+- **codegraph**：`.codegraph/` 为本地代码知识图谱索引（不入库），修改代码后可用 `codegraph sync` 增量更新。
+
+## 常见问题
+
+- 本地仓库曾为**浅克隆**导致 push 失败（`did not receive expected object`），已通过 `git fetch --unshallow` 修复为完整克隆。
+- 本机 git 已配置 `http.postBuffer 524288000` + `http.version HTTP/1.1`（规避大对象传输中断）。
 
 ## 常用开发命令
 

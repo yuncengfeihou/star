@@ -2,6 +2,9 @@
 .pi/
 .playwright-mcp/
 
+# codegraph 本地索引
+.codegraph/
+
 # 依赖
 node_modules/
 

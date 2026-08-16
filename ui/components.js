@@ -2,6 +2,17 @@
 
 import { state } from '../state.js';
 
+/**
+ * HTML 转义（标签名等用户可控文本插入 HTML 前必须转义）。
+ */
+function escapeHtmlForTags(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 // =================================================================
 //                      通用弹窗函数
 // =================================================================
@@ -66,6 +77,8 @@ export function showConfirmModal(message, title = '确认', options = {}) {
 
         const closeModal = (result) => {
             modal.classList.remove('visible');
+            // 移除 ESC 监听，防止在 document 上累积（与 showInputModal/showTextModal 保持一致）
+            document.removeEventListener('keydown', handleEsc);
             setTimeout(() => {
                 modal.remove();
                 resolve(result);
@@ -396,5 +409,134 @@ export function showEditorModal(title, initialContent, options = {}) {
         window.addEventListener('resize', centerOnResize);
         frame.classList.add('visible');
         container.classList.add('visible');
+    });
+}
+
+/**
+ * 标签编辑弹窗（chips 交互）。
+ * 输入框支持「回车 / 逗号 / 顿号」分隔添加多个标签；已添加的标签以 chip 展示，可点击 × 删除。
+ * 标签与备注并存（tags 数组字段），老数据无 tags 字段时自动视为空。
+ * @param {string[]} currentTags - 当前标签列表
+ * @param {string} title - 弹窗标题
+ * @returns {Promise<string[]|null>} 保存返回清洗后的标签数组，取消返回 null
+ */
+export function showTagsModal(currentTags = [], title = '编辑标签') {
+    return new Promise((resolve) => {
+        const existingModal = document.getElementById('star-tags-modal');
+        if (existingModal) existingModal.remove();
+
+        // 布局参考备注编辑弹窗（showInputModal 的 note 模式）：隐藏标题栏、紧凑内边距、底部按钮居中无边框。
+        // 输入框不用 ST 的 text_pole class，避免其全局样式覆盖（自定义 CSS 全属性显式定义）。
+        const modalHtml = `
+            <div id="star-tags-modal" class="star-tags-modal">
+                <div class="star-tags-container">
+                    <div class="star-tags-header hidden-header">
+                        <div class="star-tags-title">${title}</div>
+                        <div class="star-tags-close-btn"><i class="fa-solid fa-xmark"></i></div>
+                    </div>
+                    <div class="star-tags-body note-body">
+                        <div class="star-tags-desc">回车或逗号添加标签，用于右上角分类筛选</div>
+                        <div class="star-tags-chips" id="star-tags-chips"></div>
+                        <input type="text" id="star-tags-input" class="star-tags-input" placeholder="输入标签，回车或逗号添加..." spellcheck="false">
+                    </div>
+                    <div class="star-tags-footer note-footer">
+                        <button id="star-tags-cancel" class="menu_button">取消</button>
+                        <button id="star-tags-ok" class="menu_button primary_button">保存</button>
+                    </div>
+                </div>
+            </div>`;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        const modal = document.getElementById('star-tags-modal');
+        const container = modal.querySelector('.star-tags-container');
+        const chipsEl = modal.querySelector('#star-tags-chips');
+        const input = modal.querySelector('#star-tags-input');
+        const okBtn = modal.querySelector('#star-tags-ok');
+        const cancelBtn = modal.querySelector('#star-tags-cancel');
+        const closeBtn = modal.querySelector('.star-tags-close-btn');
+
+        // 应用主题（跟随收藏面板）
+        if (state.modalDialogElement && state.modalDialogElement.dataset.starTheme === 'dark') {
+            container.dataset.starTheme = 'dark';
+        }
+
+        // 初始标签去重清洗
+        let tags = [...new Set((currentTags || []).map(t => String(t).trim()).filter(Boolean))];
+
+        const renderChips = () => {
+            chipsEl.innerHTML = tags.map((t, i) => `
+                <span class="star-tag-chip">${escapeHtmlForTags(t)}<i class="fa-solid fa-xmark star-tag-chip-remove" data-idx="${i}"></i></span>
+            `).join('');
+            chipsEl.querySelectorAll('.star-tag-chip-remove').forEach(x => {
+                x.addEventListener('click', () => {
+                    tags.splice(parseInt(x.dataset.idx, 10), 1);
+                    renderChips();
+                });
+            });
+        };
+
+        // 把输入框当前内容按分隔符拆成标签加入（回车/保存/输入到逗号时调用）
+        const flushInput = () => {
+            const val = input.value;
+            if (!val.trim()) return;
+            val.split(/[,，、]+/).forEach(part => {
+                const p = part.trim();
+                if (p && !tags.includes(p)) tags.push(p);
+            });
+            input.value = '';
+            renderChips();
+        };
+
+        // 输入到逗号/顿号时：分隔符前的完整词先入列，保留最后一个未完成词继续输入
+        input.addEventListener('input', () => {
+            const v = input.value;
+            if (/[,，、]/.test(v)) {
+                const parts = v.split(/[,，、]+/);
+                const head = parts.slice(0, -1);
+                head.forEach(p => {
+                    const t = p.trim();
+                    if (t && !tags.includes(t)) tags.push(t);
+                });
+                renderChips();
+                input.value = parts[parts.length - 1];
+            }
+        });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                flushInput();
+            }
+        });
+
+        renderChips();
+
+        const closeModal = (result) => {
+            modal.classList.remove('visible');
+            document.removeEventListener('keydown', handleEsc);
+            setTimeout(() => {
+                modal.remove();
+                resolve(result);
+            }, 300);
+        };
+        const handleEsc = (e) => {
+            if (e.key === 'Escape') closeModal(null);
+        };
+
+        okBtn.addEventListener('click', () => {
+            flushInput();
+            closeModal(tags);
+        });
+        cancelBtn.addEventListener('click', () => closeModal(null));
+        closeBtn.addEventListener('click', () => closeModal(null));
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal(null);
+        });
+        document.addEventListener('keydown', handleEsc);
+
+        setTimeout(() => {
+            modal.classList.add('visible');
+            input.focus();
+        }, 10);
     });
 }

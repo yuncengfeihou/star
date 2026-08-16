@@ -31,7 +31,7 @@ const SEARCH_INPUT_CLASS = 'favorites-search-input';
 // =================================================================
 
 /**
- * Toggles the theme between light and dark, saving the choice to localStorage.
+ * Toggles the theme between light and dark, saving the choice to extension_settings.
  */
 export function toggleTheme() {
     if (!state.modalDialogElement) return;
@@ -61,7 +61,7 @@ export function toggleTheme() {
 }
 
 /**
- * Applies the saved theme from localStorage when the modal or context viewer opens.
+ * Applies the saved theme from extension_settings when the modal or context viewer opens.
  */
 export function applySavedTheme() {
     const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
@@ -88,6 +88,37 @@ export function applySavedTheme() {
 /**
  * Shows the long-press menu with options for theme, context range, items per page, and usage guide.
  */
+
+// 设置菜单的模块级清理状态（供 closeAvatarLongPressMenu 统一恢复/移除）
+let _optionsMenuResizeHandler = null;          // 居中用的 resize 处理器引用
+let _optionsMenuBackdropOriginal = null;       // 打开菜单时被禁用的主遮罩 backdrop-filter 原始值
+let _optionsMenuBackdropOriginalWebkit = null;
+
+/**
+ * 关闭设置小菜单并完整清理：移除 DOM、恢复主遮罩 backdrop-filter、移除 resize 监听。
+ * 所有关闭路径（遮罩点击 / X 按钮 / 菜单项选择 / ESC）都应走此函数，
+ * 避免直接 remove DOM 造成的样式残留与监听器泄漏。
+ */
+export function closeAvatarLongPressMenu() {
+    const overlay = document.getElementById('star-options-menu-overlay');
+    if (!overlay) return;
+    overlay.remove();
+
+    // 恢复主遮罩的 backdrop-filter（打开菜单时被置为 none）
+    const mainModalOverlay = document.getElementById('favoritesModal');
+    if (mainModalOverlay) {
+        mainModalOverlay.style.backdropFilter = _optionsMenuBackdropOriginal || '';
+        mainModalOverlay.style.webkitBackdropFilter = _optionsMenuBackdropOriginalWebkit || '';
+    }
+
+    if (_optionsMenuResizeHandler) {
+        window.removeEventListener('resize', _optionsMenuResizeHandler);
+        _optionsMenuResizeHandler = null;
+    }
+    _optionsMenuBackdropOriginal = null;
+    _optionsMenuBackdropOriginalWebkit = null;
+}
+
 export function showAvatarLongPressMenu() {
     // 1. 防止重复创建
     if (document.getElementById('star-options-menu-overlay')) return;
@@ -155,6 +186,11 @@ export function showAvatarLongPressMenu() {
                 <span class="star-options-item-label">AI答疑设置</span>
                 <span class="star-options-item-value star-options-menu-arrow"><i class="fa-solid fa-chevron-right"></i></span>
             </div>
+            <div class="star-options-menu-item" data-action="shortcut-info">
+                <i class="fa-solid fa-keyboard star-options-item-icon"></i>
+                <span class="star-options-item-label">快捷键</span>
+                <span class="star-options-item-value">Alt+S</span>
+            </div>
             <div class="star-options-group-label">其他</div>
             <div class="star-options-menu-item" data-action="toggle-debug-panel">
                 <i class="fa-solid fa-bug star-options-item-icon"></i>
@@ -183,27 +219,15 @@ export function showAvatarLongPressMenu() {
     centerMenu();
     window.addEventListener('resize', centerMenu);
 
-    // 健壮的清理函数
-    const closeMenu = () => {
-        const overlayToRemove = document.getElementById('star-options-menu-overlay');
-        if (overlayToRemove) overlayToRemove.remove();
+    // 记录居中用的 resize 处理器与主遮罩 backdrop-filter 原始值，供关闭时统一恢复
+    _optionsMenuResizeHandler = centerMenu;
+    _optionsMenuBackdropOriginal = originalBackdropFilter;
+    _optionsMenuBackdropOriginalWebkit = originalWebkitBackdropFilter;
 
-        // --- 关键修复：恢复主遮罩的 backdrop-filter ---
-        if (mainModalOverlay) {
-            mainModalOverlay.style.backdropFilter = originalBackdropFilter;
-            mainModalOverlay.style.webkitBackdropFilter = originalWebkitBackdropFilter;
-        }
-
-        window.removeEventListener('resize', centerMenu);
-        if (state.modalElement) {
-             state.modalElement.querySelector(`.${MODAL_CLOSE_X_CLASS}`).removeEventListener('click', closeMenu);
-        }
-    };
-
-    // 绑定关闭事件到自身的遮罩层
+    // 绑定关闭事件到自身的遮罩层（统一走 closeAvatarLongPressMenu 完整清理）
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) {
-            closeMenu();
+            closeAvatarLongPressMenu();
         }
     });
 
@@ -213,7 +237,7 @@ export function showAvatarLongPressMenu() {
         if (!item) return;
 
         const action = item.dataset.action;
-        closeMenu(); // 选择后总是关闭
+        closeAvatarLongPressMenu(); // 选择后总是关闭
         if (action === 'toggle-theme') {
             toggleTheme();
         } else if (action === 'usage-guide') {
@@ -228,11 +252,13 @@ export function showAvatarLongPressMenu() {
             setTimeout(showScreenshotSettingsPopup, 100);
         } else if (action === 'qa-settings') {
             setTimeout(() => import('./qa.js').then(m => m.showQASettingsPopup()), 100);
+        } else if (action === 'shortcut-info') {
+            setTimeout(showShortcutInfoPopup, 100);
         }
     });
 
-    // 主窗口的X按钮也能关闭小菜单
-    state.modalElement.querySelector(`.${MODAL_CLOSE_X_CLASS}`).addEventListener('click', closeMenu);
+    // 主窗口的X按钮也能关闭小菜单（绑定模块级函数，重复绑定会被浏览器去重，不会累积）
+    state.modalElement.querySelector(`.${MODAL_CLOSE_X_CLASS}`).addEventListener('click', closeAvatarLongPressMenu);
 }
 
 /**
@@ -359,6 +385,25 @@ export async function showItemsPerPageSettingsPopup() {
             return true;
         },
     });
+}
+
+/**
+ * 显示快捷键说明弹窗（Alt+S 全局快捷键 + 收藏面板键盘导航）。
+ */
+export function showShortcutInfoPopup() {
+    const popupHtml = `
+        <div class="star-settings-description">
+            <p><b>Alt + S</b>：一键收藏 / 取消收藏当前聊天最后一条消息（输入框内不生效，预览模式下不触发）。</p>
+            <hr>
+            <p>收藏面板打开时：</p>
+            <ul>
+                <li><b>↑ / ↓</b> — 在收藏列表之间移动</li>
+                <li><b>Home / End</b> — 跳转到列表首 / 尾</li>
+                <li><b>Enter</b> — 查看当前选中收藏的上下文</li>
+            </ul>
+        </div>
+    `;
+    showTextModal(popupHtml, '快捷键说明', { title: '快捷键说明', okButton: '知道了', wide: false });
 }
 
 /**

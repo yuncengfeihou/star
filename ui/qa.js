@@ -131,7 +131,7 @@ ${getUsageGuidePlainText()}
 ## 数据存储与备份
 - **收藏数据**实际存储在聊天文件（.jsonl）每条消息的 swipe_info 结构中（message.swipe_info[swipeId].star_favorite），随聊天记录一起保存在服务端 chats 目录，随聊天一起备份/迁移。**删除聊天文件 = 丢失该聊天所有收藏**。
 - UI 读取时通过 core.js 的 buildVirtualFavorites() 把 swipe_info 汇总为"虚拟 favorites 数组"挂在 chatMetadata.favorites 上供界面使用——它只是运行时虚拟数据，**不会写入文件**。
-- 收藏数会以 favorites_count 字段形式保存，供角色/聊天列表接口快速筛选，不会把虚拟收藏数组写入文件造成臃肿。
+- 收藏数会以 favorites_count 字段形式保存，供角色/聊天列表接口快速筛选，不会把虚拟收藏数组写入文件造成臃肿；另会注入 favorites_updated_at 时间戳，作为收藏索引缓存的增量刷新信号（时间戳变化 = 收藏可能变化）。
 - **插件设置**（主题、每页数量、上下文范围、日志面板开关、QA 配置等）存储在 SillyTavern 的 extension_settings 中（键名 star）。
 - 收藏**不会自动跨设备同步**，请使用 SillyTavern 自带的下载备份/导入备份功能迁移。
 

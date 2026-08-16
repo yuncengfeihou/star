@@ -24,9 +24,6 @@ const MANIFEST_URL = `${REPO_ROOT}/manifest.json`;
 const CHANGELOG_URL = `${REPO_ROOT}/CHANGELOG.md`;
 const UPDATE_NOTICE_URL = `${REPO_ROOT}/update.html`;
 
-const KEY_LAST_CHECK = `${PLUGIN_NAME}_last_update_check`;
-const KEY_UPDATE_INFO = `${PLUGIN_NAME}_update_info`;
-
 let remoteVersion = '0.0.0';
 let isUpdateAvailable = false;
 
@@ -76,28 +73,23 @@ async function getRemoteVersion() {
 
 /**
  * 主动检测更新（参考 QR 助手的实现）。
- * 24h 内使用 localStorage 缓存的远程版本，避免频繁请求。
+ * 24h 内使用 extension_settings 缓存的远程版本，避免频繁请求。
  * @param {boolean} force - 是否强制忽略缓存重新请求
  */
 export async function checkForUpdates(force = false) {
     const now = Date.now();
-    const lastCheck = localStorage.getItem(KEY_LAST_CHECK);
+    // 更新检查缓存存于 extension_settings（遵守项目规范：严禁使用 localStorage）
+    const settings = extension_settings[PLUGIN_NAME] || {};
+    const lastCheck = settings.lastUpdateCheck || null;
 
     let usedCache = false;
 
     // 非强制时，24h 内优先使用缓存的远程版本
     if (!force && lastCheck && (now - parseInt(lastCheck) < 86400000)) {
-        const cachedStr = localStorage.getItem(KEY_UPDATE_INFO);
-        if (cachedStr) {
-            try {
-                const cachedObj = JSON.parse(cachedStr);
-                if (cachedObj && cachedObj.latestVersion && cachedObj.latestVersion !== 'Check Failed') {
-                    remoteVersion = cachedObj.latestVersion;
-                    usedCache = true;
-                }
-            } catch (e) {
-                // JSON 解析失败，忽略缓存
-            }
+        const cachedInfo = settings.updateInfo;
+        if (cachedInfo && cachedInfo.latestVersion && cachedInfo.latestVersion !== 'Check Failed') {
+            remoteVersion = cachedInfo.latestVersion;
+            usedCache = true;
         }
     }
 
@@ -106,7 +98,7 @@ export async function checkForUpdates(force = false) {
         const remoteVer = await getRemoteVersion();
         if (remoteVer) {
             remoteVersion = remoteVer;
-            localStorage.setItem(KEY_LAST_CHECK, now.toString());
+            extension_settings[PLUGIN_NAME].lastUpdateCheck = now;
         }
     }
 
@@ -117,12 +109,13 @@ export async function checkForUpdates(force = false) {
 
     // 更新缓存（即使用了缓存也存回去，保持数据一致）
     if (remoteVersion) {
-        localStorage.setItem(KEY_UPDATE_INFO, JSON.stringify({
+        extension_settings[PLUGIN_NAME].updateInfo = {
             hasUpdate: isUpdateAvailable,
             latestVersion: remoteVersion,
             localVersion: LOCAL_VERSION,
             checkedAt: usedCache ? parseInt(lastCheck || now) : now,
-        }));
+        };
+        saveSettingsDebounced();
     }
 
     // 更新 UI 指示器
@@ -145,35 +138,38 @@ export async function checkForUpdates(force = false) {
 }
 
 /**
- * 自定义 HTML 模态框：更新确认（代替 callGenericPopup）。
- * 参考 star-update-dialog 结构，跟随插件亮/暗主题。
- * @param {string} logHtml - Markdown 渲染后的 changelog HTML
- * @param {string} remoteVer - 远程版本号
- * @returns {Promise<boolean>} true = 用户选择了立即更新
+ * 通用更新弹窗（合并原 showUpdateConfirmModal 与 showUpdateNoticeDialog 的公共逻辑）。
+ * 统一处理：主题、居中、ESC/遮罩/X 关闭、事件清理、入场/退场动画。
+ * @param {object} options
+ * @param {string} [options.overlayId] - 遮罩元素 id
+ * @param {string} [options.dialogClass] - 附加到弹窗的类（如确认弹窗的 star-update-confirm-dialog）
+ * @param {string} options.title - 弹窗标题
+ * @param {string} options.bodyHtml - 正文 HTML
+ * @param {Array<{label: string, classes?: string, value: any}>} options.buttons - 底部按钮（点击 resolve 其 value）
+ * @param {boolean} [options.centerFooter] - 底部按钮是否居中（确认弹窗用）
+ * @param {(result: any) => void} [options.onClose] - 关闭后回调（result 为 null 表示取消）
+ * @returns {Promise<any>} 点击按钮返回其 value，否则返回 null
  */
-function showUpdateConfirmModal(logHtml, remoteVer) {
+function showUpdateDialog(options) {
     return new Promise((resolve) => {
         const currentTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
 
-        // 遮罩层
         const overlay = document.createElement('div');
-        overlay.className = 'star-update-overlay star-update-confirm-overlay';
+        overlay.className = 'star-update-overlay';
+        if (options.overlayId) overlay.id = options.overlayId;
         overlay.setAttribute('data-star-theme', currentTheme);
 
-        // 弹窗
         const dialog = document.createElement('div');
-        dialog.className = 'star-update-dialog star-update-confirm-dialog';
+        dialog.className = `star-update-dialog${options.dialogClass ? ' ' + options.dialogClass : ''}`;
         dialog.setAttribute('data-star-theme', currentTheme);
         dialog.innerHTML = `
             <div class="star-update-dialog-header">
-                <span class="star-update-dialog-title">发现新版本 v${remoteVer}</span>
+                <span class="star-update-dialog-title">${options.title}</span>
                 <div class="star-update-dialog-close"><i class="fa-solid fa-xmark"></i></div>
             </div>
-            <div class="star-update-dialog-body">
-                <div class="star-changelog-container">${logHtml}</div>
-            </div>
-            <div class="star-update-dialog-footer" style="justify-content: center;">
-                <button class="star-confirm-btn-ok">立即更新</button>
+            <div class="star-update-dialog-body">${options.bodyHtml}</div>
+            <div class="star-update-dialog-footer"${options.centerFooter ? ' style="justify-content: center;"' : ''}>
+                ${options.buttons.map((b, i) => `<button class="${b.classes || 'star-update-btn-ok'}" data-action="${i}">${b.label}</button>`).join('')}
             </div>
         `;
 
@@ -189,39 +185,57 @@ function showUpdateConfirmModal(logHtml, remoteVer) {
         };
         center();
 
-        // 显示
         requestAnimationFrame(() => overlay.classList.add('visible'));
+        window.addEventListener('resize', center);
 
-        const onResize = () => center();
-        window.addEventListener('resize', onResize);
-
-        // 清理
-        const cleanup = () => {
-            overlay.classList.remove('visible');
-            window.removeEventListener('resize', onResize);
-            setTimeout(() => overlay.remove(), 250);
-        };
-
-        // 关闭事件
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) { cleanup(); resolve(false); }
-        });
-        dialog.querySelector('.star-update-dialog-close').addEventListener('click', () => {
-            cleanup(); resolve(false);
-        });
-        dialog.querySelector('.star-confirm-btn-ok').addEventListener('click', () => {
-            cleanup(); resolve(true);
-        });
-
-        // ESC 关闭
+        let finish;
+        let settled = false;
         const onKey = (e) => {
-            if (e.key === 'Escape') {
-                cleanup(); resolve(false);
-                document.removeEventListener('keydown', onKey);
-            }
+            if (e.key === 'Escape') finish(null);
         };
+
+        finish = (result) => {
+            if (settled) return;   // 防重复关闭（如快速双击按钮）
+            settled = true;
+            overlay.classList.remove('visible');
+            window.removeEventListener('resize', center);
+            document.removeEventListener('keydown', onKey);
+            setTimeout(() => {
+                overlay.remove();
+                resolve(result);
+                if (typeof options.onClose === 'function') options.onClose(result);
+            }, 250);
+        };
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) finish(null);
+        });
+        dialog.querySelector('.star-update-dialog-close').addEventListener('click', () => finish(null));
+        dialog.querySelectorAll('.star-update-dialog-footer button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = parseInt(btn.dataset.action, 10);
+                finish(options.buttons[idx] ? options.buttons[idx].value : null);
+            });
+        });
         document.addEventListener('keydown', onKey);
     });
+}
+
+/**
+ * 自定义 HTML 模态框：更新确认（代替 callGenericPopup）。
+ * 参考 star-update-dialog 结构，跟随插件亮/暗主题。
+ * @param {string} logHtml - Markdown 渲染后的 changelog HTML
+ * @param {string} remoteVer - 远程版本号
+ * @returns {Promise<boolean>} true = 用户选择了立即更新
+ */
+function showUpdateConfirmModal(logHtml, remoteVer) {
+    return showUpdateDialog({
+        dialogClass: 'star-update-confirm-dialog',
+        title: `发现新版本 v${remoteVer}`,
+        bodyHtml: `<div class="star-changelog-container">${logHtml}</div>`,
+        buttons: [{ label: '立即更新', classes: 'star-confirm-btn-ok', value: 'ok' }],
+        centerFooter: true,
+    }).then(result => result === 'ok');
 }
 
 /**
@@ -334,7 +348,7 @@ export async function handleUpdate() {
     let updatingToast = null;
     try {
         // 显示加载提示
-        const loadingToast = toastr.info('正在拉取插件【聊天生成器】更新弹窗……', '', {
+        const loadingToast = toastr.info('正在拉取插件【聊天收藏器】更新弹窗……', '', {
             timeOut: 3000, extendedTimeOut: 0, tapToDismiss: false,
         });
 
@@ -394,8 +408,8 @@ export async function handleUpdate() {
             toastr.warning('插件已经是最新版本。');
         } else {
             // 更新成功后清除缓存
-            localStorage.removeItem(KEY_LAST_CHECK);
-            localStorage.removeItem(KEY_UPDATE_INFO);
+            delete extension_settings[PLUGIN_NAME].lastUpdateCheck;
+            delete extension_settings[PLUGIN_NAME].updateInfo;
 
             extension_settings[PLUGIN_NAME].lastSeenVersion = LOCAL_VERSION;
             saveSettingsDebounced();
@@ -459,7 +473,7 @@ export async function showUpdateNoticeDialog(onClose) {
         Logger.warn('获取远程 update.html 失败，使用内置更新日志');
         contentHtml = `<div class="star-update-wrapper">
   <div class="star-update-head">
-    <div class="star-update-version-line"><span class="star-update-dot"></span>v2.2.0</div>
+    <div class="star-update-version-line"><span class="star-update-dot"></span>v${LOCAL_VERSION}</div>
     <p class="star-update-sub">收藏插件最近更新了以下内容：</p>
   </div>
   <div class="star-update-section">
@@ -482,79 +496,16 @@ export async function showUpdateNoticeDialog(onClose) {
 </div>`;
     }
 
-    // 创建遮罩层
-    const overlay = document.createElement('div');
-    overlay.id = 'star-update-overlay';
-    overlay.className = 'star-update-overlay';
-
-    // 读取当前主题并应用到弹窗
-    const currentTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
-
-    // 创建弹窗容器
-    const dialog = document.createElement('div');
-    dialog.className = 'star-update-dialog';
-    dialog.setAttribute('data-star-theme', currentTheme);
-    dialog.innerHTML = `
-        <div class="star-update-dialog-header">
-            <span class="star-update-dialog-title">Star 更新日志</span>
-            <div class="star-update-dialog-close"><i class="fa-solid fa-xmark"></i></div>
-        </div>
-        <div class="star-update-dialog-body">${contentHtml}</div>
-        <div class="star-update-dialog-footer">
-            <button class="star-update-btn-ok">知道了</button>
-        </div>
-    `;
-
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    // 居中
-    centerUpdateDialog(dialog);
-
-    // 显示
-    requestAnimationFrame(() => overlay.classList.add('visible'));
-
-    // 关闭逻辑
-    const close = () => {
-        overlay.classList.remove('visible');
-        // 动画结束后移除 DOM 并回调
-        setTimeout(() => {
-            overlay.remove();
-            window.removeEventListener('resize', onResize);
+    await showUpdateDialog({
+        overlayId: 'star-update-overlay',
+        title: 'Star 更新日志',
+        bodyHtml: contentHtml,
+        buttons: [{ label: '知道了', classes: 'star-update-btn-ok', value: 'ok' }],
+        onClose: () => {
             markUpdateAsSeen();
             if (typeof onClose === 'function') onClose();
-        }, 250);
-    };
-
-    const onResize = () => centerUpdateDialog(dialog);
-    window.addEventListener('resize', onResize);
-
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) close();
+        },
     });
-    dialog.querySelector('.star-update-dialog-close').addEventListener('click', close);
-    dialog.querySelector('.star-update-btn-ok').addEventListener('click', close);
-
-    // ESC 关闭
-    const onKey = (e) => {
-        if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    };
-    document.addEventListener('keydown', onKey);
-    // 清理 keydown 监听
-    const origClose = close;
-    const closeWrapper = () => { document.removeEventListener('keydown', onKey); origClose(); };
-    // 替换 overlay click handler 中的 close
-    overlay.onclick = (e) => { if (e.target === overlay) closeWrapper(); };
-}
-
-/** 弹窗居中 */
-function centerUpdateDialog(dialog) {
-    const ww = window.innerWidth;
-    const wh = window.innerHeight;
-    const dw = dialog.offsetWidth;
-    const dh = dialog.offsetHeight;
-    dialog.style.left = `${Math.max(0, (ww - dw) / 2)}px`;
-    dialog.style.top = `${Math.max(0, (wh - dh) / 2)}px`;
 }
 
 // ==================== 数据交互函数 ====================
@@ -576,6 +527,11 @@ export async function getAllChatFavoritesForCurrentContext(skipCurrentChat = fal
             const chatFileNameWithExt = chatMeta.file_name;
             const chatFileNameNoExt = String(chatFileNameWithExt || '').replace('.jsonl', '');
             if (!chatFileNameNoExt || (skipCurrentChat && chatFileNameNoExt === currentContextChatIdNoExt)) {
+                continue;
+            }
+            // 元数据预过滤：favorites_count 明确为 0 的聊天无收藏，跳过（避免无意义的全量拉取）
+            // 群组聊天列表（/api/chats/search）不带 chat_metadata，此过滤对其不生效，保持全量判断
+            if (chatMeta.chat_metadata?.favorites_count === 0) {
                 continue;
             }
             let fullChatData;
@@ -616,7 +572,8 @@ export async function getAllChatFavoritesForCurrentContext(skipCurrentChat = fal
         }
     } else if (context.characterId !== undefined && context.characters && context.characters[context.characterId]) {
         const charObj = context.characters[context.characterId];
-        requestBody = { avatar_url: charObj.avatar };
+        // metadata: true 让接口返回每个聊天的 chat_metadata（含 favorites_count），供上方预过滤使用
+        requestBody = { avatar_url: charObj.avatar, metadata: true };
         try {
             chatListResponse = await fetch('/api/characters/chats', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(requestBody), signal: options.signal });
             if (!chatListResponse.ok) throw new Error(`Failed to fetch chat list for character ${context.characterId}: ${chatListResponse.status}`);
@@ -753,10 +710,12 @@ export async function saveSpecificChatMetadata(chatFileNameNoExt, metadataToSave
         }
         // 剥离虚拟的 favorites 数组，防止其被真实写入 JSONL 导致文件臃肿
         // 同时注入 favorites_count，供 /api/characters/chats 返回聊天元数据时直接筛选
+        // 注入 favorites_updated_at：作为收藏索引缓存的增量刷新信号（时间戳变化 = 该聊天收藏可能变化）
         const metadataClone = JSON.parse(JSON.stringify(metadataToSave));
         const favoritesCount = Array.isArray(metadataToSave.favorites) ? metadataToSave.favorites.length : 0;
         delete metadataClone.favorites;
         metadataClone.favorites_count = favoritesCount;
+        metadataClone.favorites_updated_at = Date.now();
 
         const finalMetadataObjectForSave = {
             user_name: context.userAlias || context.name1 || "User",
@@ -806,11 +765,12 @@ export async function saveSpecificChatMetadata(chatFileNameNoExt, metadataToSave
 
 /**
  * 扫描所有角色（含群组），找出含收藏的角色及其收藏数。
- * 用于角色切换器：建立「有收藏的角色」索引，切换时可即时加载。
- * 扫描时一并缓存完整聊天数据（messages + favorites），避免切换时重复请求。
+ * 用于角色切换器：建立「有收藏的角色」轻量索引，切换角色时按需拉取完整数据。
+ * 扫描仅依赖聊天的 favorites_count 元数据（count>0 直接采用，count===0 跳过，
+ * 仅旧数据无该字段时才拉一次全量确认），不缓存完整消息/收藏数据，避免内存膨胀。
  * @param {function} onProgress - 进度回调 (current, total, charName)
  * @param {object} options - { signal: AbortSignal }
- * @returns {Promise<Array>} [{characterId, name, avatar, isGroup, totalFavorites, chatsWithFavorites}]
+ * @returns {Promise<Array>} [{characterId, name, avatar, isGroup, totalFavorites, chatsWithFavorites}]，其中 chatsWithFavorites 为 [{fileName, displayName, favoritesCount, last_mes}]
  */
 export async function scanAllCharactersForFavorites(onProgress, options = {}) {
     const context = getContext();
@@ -848,43 +808,57 @@ export async function scanAllCharactersForFavorites(onProgress, options = {}) {
         }
         if (chatList.length === 0) continue;
 
-        // 2) 根据聊天元数据中的 favorites_count 预过滤：
-        //    - count > 0  → 确定有收藏，需加载完整数据缓存
-        //    - count === undefined → 旧数据未标记，需回退到逐个检查
+        // 2) 根据聊天元数据中的 favorites_count 预过滤，避免无收藏聊天被全量拉取：
+        //    - count > 0 → 元数据已确认有收藏，直接采用计数（零全量请求）
+        //    - count === undefined → 旧数据未标记，回退到拉一次全量确认（并静默补写计数）
         //    - count === 0 → 确定无收藏，跳过（省去一次 /api/chats/get 请求）
-        const chatsToCheck = chatList.filter(meta => meta.chat_metadata?.favorites_count !== 0);
-        if (chatsToCheck.length === 0) continue;
-
+        // 扫描结果只保留轻量索引（不缓存完整消息/收藏数据，切换角色时按需拉取，避免内存膨胀）
         const chatsWithFavorites = [];
-        await Promise.all(chatsToCheck.map(async (chatMeta) => {
-            if (options.signal?.aborted) return;
+        const staleChats = [];
+        for (const chatMeta of chatList) {
+            if (options.signal?.aborted) break;
+            const count = chatMeta.chat_metadata?.favorites_count;
             const chatFileNameNoExt = String(chatMeta.file_name || '').replace('.jsonl', '');
-            if (!chatFileNameNoExt) return;
-            try {
-                const fullChatData = await getFullChatData(i, null, chatFileNameNoExt, false, chatMeta, { signal: options.signal });
-                // 自动修正：元数据 favorites_count 与实际不符（如 ST bug 导致消息无声消失），静默修复
-                const metaCount = chatMeta.chat_metadata?.favorites_count;
-                const actualCount = fullChatData?.metadata?.favorites?.length || 0;
-                if (metaCount !== undefined && metaCount !== actualCount) {
-                    Logger.debug(`[auto-fix] favorites_count 不一致: ${chatFileNameNoExt} 元数据=${metaCount} 实际=${actualCount}，已修正`);
-                    // 修正内存中的计数，下次保存时自动写入 JSONL
-                    if (fullChatData.metadata) fullChatData.metadata.favorites_count = actualCount;
-                }
-                if (fullChatData && fullChatData.metadata?.favorites?.length > 0) {
-                    chatsWithFavorites.push({
-                        fileName: chatFileNameNoExt,
-                        displayName: chatFileNameNoExt,
-                        favoritesCount: fullChatData.metadata.favorites.length,
-                        metadata: fullChatData.metadata,
-                        messages: fullChatData.messages,
-                        favorites: fullChatData.metadata.favorites,
-                        last_mes: chatMeta.last_mes || '',
-                    });
-                }
-            } catch (e) {
-                if (isAbortError(e, options.signal)) return;
+            if (!chatFileNameNoExt) continue;
+            if (count === 0) continue;      // 明确无收藏，跳过
+            if (count > 0) {                // 元数据已确认有收藏，信元数据（零全量请求）
+                chatsWithFavorites.push({
+                    fileName: chatFileNameNoExt,
+                    displayName: chatFileNameNoExt,
+                    favoritesCount: count,
+                    last_mes: chatMeta.last_mes || '',
+                });
+            } else {                        // 旧数据无 favorites_count，需拉一次确认
+                staleChats.push(chatMeta);
             }
-        }));
+        }
+
+        // 旧数据（无 favorites_count）逐个拉全量确认，有收藏则补写计数
+        if (staleChats.length > 0) {
+            await Promise.all(staleChats.map(async (chatMeta) => {
+                if (options.signal?.aborted) return;
+                const chatFileNameNoExt = String(chatMeta.file_name || '').replace('.jsonl', '');
+                if (!chatFileNameNoExt) return;
+                try {
+                    const fullChatData = await getFullChatData(i, null, chatFileNameNoExt, false, chatMeta, { signal: options.signal });
+                    const actualCount = fullChatData?.metadata?.favorites?.length || 0;
+                    // 自动修正：为旧数据补上计数，下次保存时自动写入 JSONL
+                    if (actualCount > 0 && fullChatData.metadata) {
+                        fullChatData.metadata.favorites_count = actualCount;
+                    }
+                    if (actualCount > 0) {
+                        chatsWithFavorites.push({
+                            fileName: chatFileNameNoExt,
+                            displayName: chatFileNameNoExt,
+                            favoritesCount: actualCount,
+                            last_mes: chatMeta.last_mes || '',
+                        });
+                    }
+                } catch (e) {
+                    if (isAbortError(e, options.signal)) return;
+                }
+            }));
+        }
 
         if (chatsWithFavorites.length > 0) {
             chatsWithFavorites.sort((a, b) => b.favoritesCount - a.favoritesCount);
@@ -921,9 +895,6 @@ export async function scanAllCharactersForFavorites(onProgress, options = {}) {
                         fileName: chatFileNameNoExt,
                         displayName: chatFileNameNoExt,
                         favoritesCount: fullChatData.metadata.favorites.length,
-                        metadata: fullChatData.metadata,
-                        messages: fullChatData.messages,
-                        favorites: fullChatData.metadata.favorites,
                     });
                 }
             } catch (e) {

@@ -44,6 +44,40 @@ export function buildVirtualFavorites(messages) {
     return extractedFavorites;
 }
 
+// ==================== 虚拟收藏数组缓存 ====================
+
+// 缓存键为 chat 数组引用 + 长度（消息增删必然改变长度；内容替换不影响收藏结构，无需失效）。
+// 收藏写操作（增/删/改备注）重建后主动写入缓存；读操作（ensureFavoritesArrayExists）
+// 命中时直接复用，避免对上千条消息的聊天在每次渲染/切换收藏时反复全量遍历。
+let _virtualFavoritesCacheChat = null;
+let _virtualFavoritesCacheLength = -1;
+let _virtualFavoritesCacheResult = null;
+
+function buildVirtualFavoritesCached(messages) {
+    const length = Array.isArray(messages) ? messages.length : 0;
+    if (_virtualFavoritesCacheResult && messages === _virtualFavoritesCacheChat && length === _virtualFavoritesCacheLength) {
+        return _virtualFavoritesCacheResult;
+    }
+    const result = buildVirtualFavorites(messages);
+    _virtualFavoritesCacheChat = messages;
+    _virtualFavoritesCacheLength = length;
+    _virtualFavoritesCacheResult = result;
+    return result;
+}
+
+/**
+ * 收藏写操作（增/删/改备注/改标签）后强制重建虚拟收藏缓存并写入缓存。
+ * 写操作只改变 swipe_info 的收藏结构、不改变 chat 长度，而缓存键是「引用 + 长度」，
+ * 若沿用 buildVirtualFavoritesCached 会命中旧缓存，导致 UI 与实际数据不一致（如删除后仍显示、改标签后不刷新）。
+ */
+function rebuildVirtualFavoritesCache(messagesArray) {
+    const result = buildVirtualFavorites(messagesArray);
+    _virtualFavoritesCacheChat = messagesArray;
+    _virtualFavoritesCacheLength = Array.isArray(messagesArray) ? messagesArray.length : 0;
+    _virtualFavoritesCacheResult = result;
+    return result;
+}
+
 const messageButtonHtml = `
     <div class="mes_button favorite-toggle-icon interactable" title="收藏/取消收藏 (长按编辑备注)" tabindex="0">
         <i class="fa-solid fa-star"></i>
@@ -103,7 +137,7 @@ export function ensureFavoritesArrayExists() {
     } catch (e) {
         return null;
     }
-    context.chatMetadata.favorites = buildVirtualFavorites(context.chat);
+    context.chatMetadata.favorites = buildVirtualFavoritesCached(context.chat);
     return context.chatMetadata;
 }
 
@@ -152,7 +186,7 @@ export function addFavorite(messageInfo, targetChatFile = null) {
     // 收藏数变化，标记角色切换器缓存过期，下次打开重新扫描
     state.charactersCacheStale = true;
 
-    const virtualFavs = buildVirtualFavorites(messagesArray);
+    const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
     if (chatDataInCache) {
         chatDataInCache.favorites = virtualFavs;
         if (chatDataInCache.metadata) chatDataInCache.metadata.favorites = virtualFavs;
@@ -166,10 +200,6 @@ export function addFavorite(messageInfo, targetChatFile = null) {
     }
 
     return newItem;
-}
-
-export function addFavoriteLogic() {
-    // 已弃用
 }
 
 /**
@@ -208,7 +238,7 @@ export function removeFavoriteById(favoriteId, targetChatFile = null) {
         Logger.success(`removeFavoriteById: 删除成功, favId=${favoriteId}`);
         // 收藏数变化，标记角色切换器缓存过期
         state.charactersCacheStale = true;
-        const virtualFavs = buildVirtualFavorites(messagesArray);
+        const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
         if (chatDataInCache) {
             chatDataInCache.favorites = virtualFavs;
             if (chatDataInCache.metadata) chatDataInCache.metadata.favorites = virtualFavs;
@@ -257,7 +287,7 @@ export function updateFavoriteNote(favoriteId, note, targetChatFile = null) {
     if (updated) {
         // 备注内容变化，标记角色切换器缓存过期（缓存的 messages 里有旧备注）
         state.charactersCacheStale = true;
-        const virtualFavs = buildVirtualFavorites(messagesArray);
+        const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
         if (chatDataInCache) {
             chatDataInCache.favorites = virtualFavs;
             if (chatDataInCache.metadata) chatDataInCache.metadata.favorites = virtualFavs;
@@ -269,6 +299,145 @@ export function updateFavoriteNote(favoriteId, note, targetChatFile = null) {
             saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray);
         }
     }
+}
+
+/**
+ * 更新收藏标签（tags 数组，与备注 note 并存互不干扰）。
+ * 老数据无 tags 字段时视为空数组，天然兼容。
+ */
+export function updateFavoriteTags(favoriteId, tags, targetChatFile = null) {
+    const context = getContext();
+    const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
+    const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : (state.currentViewingChatFile || currentContextChatIdNoExt);
+
+    const chatDataInCache = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
+    const messagesArray = chatDataInCache ? chatDataInCache.messages : context.chat;
+    if (!messagesArray) return;
+
+    // 清洗：去空、去重、去首尾空格
+    const cleanTags = [...new Set((tags || []).map(t => String(t).trim()).filter(Boolean))];
+
+    let updated = false;
+    for (let i = 0; i < messagesArray.length; i++) {
+        const msg = messagesArray[i];
+        if (msg && msg.swipe_info) {
+            for (let sId = 0; sId < msg.swipe_info.length; sId++) {
+                const info = msg.swipe_info[sId];
+                if (info && info.star_favorite && info.star_favorite.id === favoriteId) {
+                    info.star_favorite.tags = cleanTags;
+                    updated = true;
+                    break;
+                }
+            }
+        }
+        if (updated) break;
+    }
+
+    if (updated) {
+        // 标签内容变化，标记角色切换器缓存过期（缓存的 messages 里有旧标签）
+        state.charactersCacheStale = true;
+        const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
+        if (chatDataInCache) {
+            chatDataInCache.favorites = virtualFavs;
+            if (chatDataInCache.metadata) chatDataInCache.metadata.favorites = virtualFavs;
+        }
+        if (chatFileToModify === currentContextChatIdNoExt) {
+            context.chatMetadata.favorites = virtualFavs;
+            saveMetadataDebounced();
+        } else {
+            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray);
+        }
+    }
+}
+
+/**
+ * 在多条收藏中查找包含指定 swipe 收藏 id 的 favoritedSwipes 列表。
+ * 虚拟收藏的 fav.id 是「第一个」收藏的 swipe id，而卡片传入的 favId 是当前查看的 swipe id，
+ * 多 Swipe 收藏时必须按「favoritedSwipes 中包含该 id」查找，否则非首个 swipe 会找不到收藏项、并误读第一条的数据。
+ * @returns {Array|null} 命中的 favoritedSwipes 列表，未命中返回 null
+ */
+function findFavSwipesById(favorites, favId) {
+    return (favorites || []).find(fav => (fav.favoritedSwipes || []).some(s => s.id === favId))?.favoritedSwipes || null;
+}
+
+/**
+ * 从收藏面板编辑标签（与 handleEditNote 对称）。
+ */
+export async function handleEditTags(favId, targetChatFile = null) {
+    const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : state.currentViewingChatFile;
+    let favSwipes = null;
+    const context = getContext();
+    const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
+
+    if (chatFileToModify === currentContextChatIdNoExt) {
+        const meta = ensureFavoritesArrayExists();
+        favSwipes = findFavSwipesById(meta?.favorites, favId);
+    } else if (chatFileToModify && state.allChatsFavoritesData.length > 0) {
+        const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
+        favSwipes = findFavSwipesById(chatData?.metadata?.favorites, favId);
+    }
+
+    if (!favSwipes) {
+        toastr.error('无法找到收藏项');
+        return;
+    }
+
+    // 优先取与 favId 精确匹配的 swipe（多 swipe 场景下卡片 favId 是当前查看的那条），兜底取第一条
+    const swipe = favSwipes.find(s => s.id === favId) || favSwipes[0];
+    const currentTags = Array.isArray(swipe?.tags) ? [...swipe.tags] : [];
+
+    const { showTagsModal } = await import('./ui/index.js');
+    const newTags = await showTagsModal(currentTags, '编辑标签');
+    if (newTags === null) return;
+
+    const unchanged = newTags.length === currentTags.length && newTags.every(t => currentTags.includes(t));
+    if (!unchanged) {
+        updateFavoriteTags(favId, newTags, chatFileToModify);
+        // 刷新面板以显示标签徽章（updateFavoriteTags 已重建虚拟收藏缓存，重渲染即可拿到新 tags）
+        if (state.modalElement && state.modalElement.classList.contains('visible')) {
+            const { renderFavoritesView } = await import('./ui/index.js');
+            await renderFavoritesView(state.currentViewingChatFile);
+        }
+    }
+}
+
+/**
+ * 全局快捷键（Alt+S）：收藏/取消收藏当前聊天最后一条消息。
+ * 在预览模式下不应触发（预览的是临时加载的历史上下文，非当前聊天）。
+ */
+export function toggleFavoriteLastMessage() {
+    const context = getContext();
+    if (!context || !Array.isArray(context.chat) || context.chat.length === 0) {
+        toastr.info('当前聊天没有可收藏的消息');
+        return;
+    }
+
+    // 取最后一条非空消息（跳过空占位）
+    let idx = -1, msg = null;
+    for (let i = context.chat.length - 1; i >= 0; i--) {
+        const m = context.chat[i];
+        if (m && typeof m.mes === 'string' && m.mes.trim()) {
+            idx = i;
+            msg = m;
+            break;
+        }
+    }
+    if (!msg) {
+        toastr.info('当前聊天没有可收藏的消息');
+        return;
+    }
+
+    ensureCurrentChatIsCached();
+    const swipeId = msg.swipe_id || 0;
+    if (msg.swipe_info && msg.swipe_info[swipeId] && msg.swipe_info[swipeId].star_favorite) {
+        const favId = msg.swipe_info[swipeId].star_favorite.id;
+        removeFavoriteById(favId);
+        toastr.info('已取消收藏最后一条消息');
+    } else {
+        addFavorite({ messageId: String(idx), sender: msg.name, role: msg.is_user ? 'user' : 'character' });
+        toastr.success('已收藏最后一条消息（再次按 Alt+S 可取消）');
+    }
+    setTimeout(refreshFavoriteIconsInView, 100);
 }
 
 /**
@@ -405,25 +574,26 @@ export async function handleEditMessageContent(favId, messageId, targetChatFile 
  */
 export async function handleEditNote(favId, targetChatFile = null) {
     const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : state.currentViewingChatFile;
-    let favorite = null;
-    let currentNote = '';
+    let favSwipes = null;
     const context = getContext();
     const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
 
     if (chatFileToModify === currentContextChatIdNoExt) {
         const meta = ensureFavoritesArrayExists();
-        favorite = meta?.favorites?.find(fav => fav.id === favId);
+        favSwipes = findFavSwipesById(meta?.favorites, favId);
     } else if (chatFileToModify && state.allChatsFavoritesData.length > 0) {
         const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
-        favorite = chatData?.metadata?.favorites?.find(fav => fav.id === favId);
+        favSwipes = findFavSwipesById(chatData?.metadata?.favorites, favId);
     }
 
-    if (favorite) {
-        currentNote = favorite.note || '';
-    } else {
+    if (!favSwipes) {
         toastr.error('无法找到收藏项');
         return;
     }
+
+    // 优先取与 favId 精确匹配的 swipe（卡片 favId 是当前查看的那条），兜底取第一条
+    const swipe = favSwipes.find(s => s.id === favId) || favSwipes[0];
+    const currentNote = swipe ? (swipe.note || '') : '';
 
     const { showInputModal } = await import('./ui/index.js');
     const newNote = await showInputModal('', '编辑备注', currentNote, { isNoteMode: true });
@@ -526,13 +696,23 @@ export function addFavoriteIconsToMessages() {
 
 /**
  * 刷新视图中的收藏图标。
+ * 传入 targetMesId 时只定向刷新该消息（MESSAGE_SWIPED/UPDATED 等高频场景），
+ * 否则全量刷新（切换聊天/批量加载后使用）。
  */
-export function refreshFavoriteIconsInView() {
+export function refreshFavoriteIconsInView(targetMesId = null) {
     const context = getContext();
     if (!context || !context.chat) return;
-    addFavoriteIconsToMessages();
 
-    $('#chat').find('.mes').each(function() {
+    // 定向刷新时图标已存在，无需补图标；全量刷新时先补齐缺失图标
+    if (targetMesId === null || targetMesId === undefined) {
+        addFavoriteIconsToMessages();
+    }
+
+    const selector = (targetMesId === null || targetMesId === undefined)
+        ? '#chat .mes'
+        : `#chat .mes[mesid="${targetMesId}"]`;
+
+    $(selector).each(function() {
         const messageId = $(this).attr('mesid');
         if (messageId) {
             const messageIndex = parseInt(messageId, 10);

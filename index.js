@@ -146,6 +146,23 @@ jQuery(async () => {
             });
 
         // ==========================================
+        // 全局快捷键：Alt+S 收藏/取消收藏最后一条消息
+        // ==========================================
+        $(document).on('keydown', async (e) => {
+            // 仅响应 Alt（不叠加 Ctrl/Meta），键为 S
+            if (!e.altKey || e.ctrlKey || e.metaKey) return;
+            if (e.key.toLowerCase() !== 's') return;
+            // 输入区（聊天输入框等）内不触发，避免打字时误触
+            const tag = (e.target.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+            e.preventDefault();
+            // 预览模式下不触发（预览的是临时历史上下文，非当前聊天）
+            if (state.isPreviewingContext) return;
+            const { toggleFavoriteLastMessage } = await import('./core.js');
+            toggleFavoriteLastMessage();
+        });
+
+        // ==========================================
         // SillyTavern 核心事件监听器
         // ==========================================
         eventSource.on(event_types.CHAT_CHANGED, () => {
@@ -189,8 +206,9 @@ jQuery(async () => {
         eventSource.on(event_types.MESSAGE_RECEIVED, handleNewMessage);
         eventSource.on(event_types.MESSAGE_SENT, handleNewMessage);
 
-        const handleMessageUpdate = () => setTimeout(() => {
-            if (!state.isPreviewingContext) refreshFavoriteIconsInView();
+        const handleMessageUpdate = (messageId) => setTimeout(() => {
+            // 定向刷新当前 swipe 的消息图标，避免全量遍历 #chat（消息多时卡顿）
+            if (!state.isPreviewingContext) refreshFavoriteIconsInView(String(messageId));
         }, 150);
         eventSource.on(event_types.MESSAGE_SWIPED, handleMessageUpdate);
         eventSource.on(event_types.MESSAGE_UPDATED, handleMessageUpdate);

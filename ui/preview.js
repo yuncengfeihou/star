@@ -17,6 +17,17 @@ const SEARCH_INPUT_CLASS = 'favorites-search-input';
 const SEARCH_CONTAINER_CLASS = 'favorites-search-container';
 const PREVIEW_EXIT_BUTTON_ID = 'favorites-preview-exit-button';
 const MODAL_CLASS_NAME = 'favorites-modal-dialog';
+
+/**
+ * HTML 转义：发送者名等用户可控文本插入 HTML 前必须转义，防止自 XSS。
+ */
+function escapeHtml(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
 // =================================================================
 //           AUTO-HIDE PREVIEW TOGGLE ON SCROLL/LONG-PRESS
 // =================================================================
@@ -401,9 +412,9 @@ export function renderContextMessage(msgData, isHighlighted, chatContext, target
 
     return `
             <div class="context-message-wrapper ${messageClass} ${highlightClass}" mesid="${originalIndex}">
-                <div class="context-message-avatar"><img src="${avatarImg}" alt="${senderName}" onerror="this.src='img/ai4.png'"></div>
+                <div class="context-message-avatar"><img src="${avatarImg}" alt="${escapeHtml(senderName)}" onerror="this.src='img/ai4.png'"></div>
                 <div class="context-message-bubble">
-                    <div class="context-message-name">${senderName}</div>
+                    <div class="context-message-name">${escapeHtml(senderName)}</div>
 
                     ${reasoningHtml} <!-- 在这里插入推理内容 -->
 
@@ -493,8 +504,8 @@ export function renderSingleContextMessage(msgData, chatContext, swipeId, favori
     return `
         <div class="context-single-content">
             <div class="context-single-scroll">
-                <div class="context-single-avatar"><img src="${avatarImg}" alt="${senderName}" onerror="this.src='img/ai4.png'"></div>
-                <div class="context-single-name">${senderName}</div>
+                <div class="context-single-avatar"><img src="${avatarImg}" alt="${escapeHtml(senderName)}" onerror="this.src='img/ai4.png'"></div>
+                <div class="context-single-name">${escapeHtml(senderName)}</div>
                 ${reasoningHtml}
                 <div class="context-single-text">${formattedContent}</div>
                 ${timeRowHtml}

@@ -46,7 +46,13 @@ export const state = {
     },
 
     // 截图选择状态（预览模式内持久化，退出预览时清除）
-    screenshotSelection: null
+    screenshotSelection: null,
+
+    // 标签筛选：当前激活的标签名（null = 全部），配合右上角标签图标使用
+    activeTagFilter: null,
+
+    // 面板键盘导航：当前聚焦的收藏项在可见列表中的索引（-1 = 无聚焦）
+    keyboardFocusIndex: -1
 };
 
 // 初始化设置

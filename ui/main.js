@@ -6,7 +6,7 @@ import { timestampToMoment } from '../../../../utils.js';
 import { state, PLUGIN_NAME } from '../state.js';
 import { getAllChatFavoritesForCurrentContext, getFullChatData, isAbortError } from '../api.js';
 import { ensureFavoritesArrayExists, ensureCurrentChatIsCached } from '../core.js';
-import { applySavedTheme, showAvatarLongPressMenu } from './settings.js';
+import { applySavedTheme, showAvatarLongPressMenu, closeAvatarLongPressMenu } from './settings.js';
 import { openCharacterSwitcher, closeCharacterSwitcher, preloadCharacterFavorites, abortPreload } from './character-switcher.js';
 import { handleViewContext, closeContextFrame } from './preview.js';
 import { toggleDebugPanel } from './debug.js';
@@ -33,6 +33,17 @@ const PREVIEW_EXIT_BUTTON_ID = 'favorites-preview-exit-button';
 
 const favDoc = document;
 
+/**
+ * HTML 转义：用户可控文本（备注、发送者名等）插入 HTML 前必须转义，防止自 XSS。
+ */
+function escapeHtml(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 // 后台批量加载收藏数据的取消控制器（切换聊天/重开面板时用来中断进行中的请求）
 let backgroundLoadController = null;
 
@@ -58,6 +69,7 @@ export function ensureModalStructure() {
                     <input type="text" class="${SEARCH_INPUT_CLASS}" placeholder="检索收藏...">
                     <i class="fa-solid fa-magnifying-glass ${SEARCH_ICON_CLASS}"></i>
                 </div>
+                <div class="favorites-tag-btn" title="按标签筛选"><i class="fa-solid fa-tags"></i></div>
                 <div class="favorites-qa-btn" title="AI答疑助手"><i class="fa-solid fa-circle-question"></i></div>
                 <div class="${MODAL_CLOSE_X_CLASS}"><i class="fa-solid fa-xmark"></i></div>
             </div>
@@ -80,6 +92,12 @@ export function ensureModalStructure() {
         qaBtn.addEventListener('click', () => {
             import('./qa.js').then(m => m.openQAPanel());
         });
+    }
+
+    // 右上角标签筛选按钮（点击展开标签下拉菜单）
+    const tagBtn = state.modalElement.querySelector('.favorites-tag-btn');
+    if (tagBtn) {
+        tagBtn.addEventListener('click', toggleTagFilterMenu);
     }
 
 	// --- MODIFIED: Sidebar Toggle & Long-press Options Menu (with Touch Support) ---
@@ -147,6 +165,9 @@ export function ensureModalStructure() {
         }
     });
 
+    // 搜索输入防抖计时器（跨页全量匹配渲染成本较高，避免每次按键都重建列表）
+    let searchDebounceTimer = null;
+
     // 阻止点击过滤按钮时搜索框失去焦点（避免因blur事件导致搜索框收起）
     searchFilter.addEventListener('mousedown', (e) => {
         e.preventDefault();
@@ -154,13 +175,15 @@ export function ensureModalStructure() {
 
     searchFilter.addEventListener('click', (e) => {
         e.currentTarget.classList.toggle('active');
+        clearTimeout(searchDebounceTimer);
         const query = searchInput.value.toLowerCase();
         handleSearchInModal(query);
     });
 
     searchInput.addEventListener('input', (e) => {
         const query = e.target.value.toLowerCase();
-        handleSearchInModal(query);
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => handleSearchInModal(query), 150);
     });
 
     state.modalElement.addEventListener('click', (e) => {
@@ -173,31 +196,270 @@ export function ensureModalStructure() {
 }
 
 /**
- * Handles search functionality in the modal.
+ * 在 HTML 文本中高亮搜索关键词（保护标签结构，只高亮文本节点）。
+ * 搜索结果渲染时调用：正文是 messageFormatting 后的 HTML，备注是纯文本，二者都能安全处理。
  */
-export function handleSearchInModal(query) {
+function highlightInHtml(html, query) {
+    if (!query) return html;
+    const escapedQuery = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!escapedQuery) return html;
+
+    // 先把 HTML 标签整体占位，避免高亮正则误伤标签名/属性中的文本
+    const tagStack = [];
+    const protectedHtml = html.replace(/<[^>]*>/g, (m) => {
+        tagStack.push(m);
+        return `\u0000T${tagStack.length - 1}\u0000`;
+    });
+    const highlighted = protectedHtml.replace(new RegExp(`(${escapedQuery})`, 'gi'), '<mark class="star-search-mark">$1</mark>');
+    return highlighted.replace(/\u0000T(\d+)\u0000/g, (_, i) => tagStack[parseInt(i, 10)]);
+}
+
+// =================================================================
+//                      标签筛选（右上角图标 + 卡片徽章）
+// =================================================================
+
+/**
+ * 收集当前聊天全部收藏用到的标签及其计数（供下拉菜单展示，按使用次数降序）。
+ */
+function collectTags(chatData) {
+    const map = new Map();
+    (chatData?.favorites || []).forEach(fav => {
+        (fav.favoritedSwipes || []).forEach(s => {
+            (Array.isArray(s.tags) ? s.tags : []).forEach(t => {
+                const k = String(t).trim();
+                if (k) map.set(k, (map.get(k) || 0) + 1);
+            });
+        });
+    });
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+/**
+ * 获取经过标签筛选后的收藏列表（无激活标签时返回全部）。
+ * 供正常渲染（renderMainPanel）与搜索（handleSearchInModal）共用，保证两处筛选一致。
+ */
+function getFilteredFavorites(chatData) {
+    let list = chatData?.favorites || [];
+    if (state.activeTagFilter) {
+        list = list.filter(fav => (fav.favoritedSwipes || []).some(s => Array.isArray(s.tags) && s.tags.includes(state.activeTagFilter)));
+    }
+    return list;
+}
+
+/**
+ * 同步右上角标签图标的激活态（有激活标签时高亮）。
+ */
+function updateTagBtnState() {
+    const tagBtn = state.modalElement?.querySelector('.favorites-tag-btn');
+    if (tagBtn) tagBtn.classList.toggle('active', !!state.activeTagFilter);
+}
+
+// 标签下拉菜单的点击外部关闭处理器（模块级，供 closeTagFilterMenu 移除）
+let _tagMenuOutsideHandler = null;
+
+/**
+ * 关闭标签筛选下拉菜单并清理事件监听。
+ */
+function closeTagFilterMenu() {
+    const menu = document.getElementById('star-tag-filter-menu');
+    if (menu) menu.remove();
+    if (_tagMenuOutsideHandler) {
+        document.removeEventListener('mousedown', _tagMenuOutsideHandler);
+        _tagMenuOutsideHandler = null;
+    }
+}
+
+/**
+ * 切换标签筛选下拉菜单（展开/收起）。
+ * 菜单列出「全部收藏」+ 当前聊天所有标签（含计数）；选择后按标签过滤并重新渲染。
+ */
+function toggleTagFilterMenu() {
+    // 已展开则收起
+    if (document.getElementById('star-tag-filter-menu')) {
+        closeTagFilterMenu();
+        return;
+    }
+
+    const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === String(state.currentViewingChatFile || '').replace('.jsonl', ''));
+    const tagBtn = state.modalElement?.querySelector('.favorites-tag-btn');
+    if (!tagBtn) return;
+    const tags = collectTags(chatData);
+
+    const menu = document.createElement('div');
+    menu.id = 'star-tag-filter-menu';
+    menu.className = 'star-tag-filter-menu';
+    if (state.modalDialogElement?.dataset.starTheme === 'dark') menu.dataset.starTheme = 'dark';
+
+    const tagItemsHtml = tags.length === 0
+        ? '<div class="star-tag-filter-empty">还没有标签<br>在收藏卡片上点 <i class="fa-solid fa-tags"></i> 添加</div>'
+        : tags.map(([tag, count]) => `
+            <div class="star-tag-filter-item${state.activeTagFilter === tag ? ' active' : ''}" data-tag="${escapeHtml(tag)}">
+                <span class="star-tag-filter-name">${escapeHtml(tag)}</span>
+                <span class="star-tag-filter-count">${count}</span>
+            </div>`).join('');
+
+    menu.innerHTML = `
+        <div class="star-tag-filter-head">按标签筛选</div>
+        <div class="star-tag-filter-list">
+            <div class="star-tag-filter-item${state.activeTagFilter ? '' : ' active'}" data-tag="__all__">
+                <span class="star-tag-filter-name">全部收藏</span>
+                <span class="star-tag-filter-count">${chatData?.favorites?.length || 0}</span>
+            </div>
+            ${tagItemsHtml}
+        </div>
+    `;
+    document.body.appendChild(menu);
+
+    // 定位：锚定右上角标签按钮下方，右缘对齐
+    const rect = tagBtn.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + 6}px`;
+    menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+
+    menu.querySelector('.star-tag-filter-list').addEventListener('click', async (e) => {
+        const item = e.target.closest('.star-tag-filter-item');
+        if (!item) return;
+        state.activeTagFilter = item.dataset.tag === '__all__' ? null : item.dataset.tag;
+        closeTagFilterMenu();
+        updateTagBtnState();
+        state.currentPage = 1;
+        await renderFavoritesView(state.currentViewingChatFile);
+    });
+
+    // 点击菜单外部（非菜单、非按钮）时关闭
+    _tagMenuOutsideHandler = (e) => {
+        if (!e.target.closest('#star-tag-filter-menu') && !e.target.closest('.favorites-tag-btn')) {
+            closeTagFilterMenu();
+        }
+    };
+    setTimeout(() => document.addEventListener('mousedown', _tagMenuOutsideHandler), 0);
+}
+
+// =================================================================
+//                      面板键盘导航
+// =================================================================
+
+/**
+ * 收藏面板内的键盘导航：↑/↓ 移动焦点，Home/End 跳转首尾，Enter 查看上下文。
+ * 与 handleEscKey 分离注册（职责单一），在面板打开时挂载、关闭时移除。
+ */
+function handleFavoritesNavKeydown(event) {
+    const key = event.key;
+    const isNavKey = key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End' || key === 'Enter';
+    if (!isNavKey) return;
+
+    // 忽略输入区（搜索框等）按键，避免与文本编辑冲突
+    const tag = (event.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || event.target.isContentEditable) return;
+
+    // 有更高层级的弹窗打开时不拦截（编辑器/上下文查看器/设置菜单/角色切换器/QA/调试/截图选择）
+    if (document.getElementById('star-editor-frame')
+        || document.getElementById('context-messages-frame')
+        || document.getElementById('star-options-menu-overlay')
+        || document.getElementById('star-character-switcher')
+        || document.getElementById('star-qa-modal')
+        || document.getElementById('star-debug-modal')
+        || document.getElementById('star-ss-settings-overlay')
+        || document.getElementById('star-screenshot-popup')) return;
+
+    const items = state.modalBodyElement ? [...state.modalBodyElement.querySelectorAll('.favorite-item')] : [];
+    if (items.length === 0) return;
+
+    if (key === 'Enter') {
+        // 仅在已有聚焦项时触发查看上下文，否则不拦截（让默认行为继续）
+        if (state.keyboardFocusIndex >= 0 && state.keyboardFocusIndex < items.length) {
+            event.preventDefault();
+            const item = items[state.keyboardFocusIndex];
+            handleViewContext(item.dataset.msgId, state.currentViewingChatFile, item.dataset.swipeId);
+        }
+        return;
+    }
+
+    event.preventDefault();
+    let idx = state.keyboardFocusIndex;
+    if (key === 'ArrowDown') idx = Math.min(items.length - 1, idx + 1);
+    else if (key === 'ArrowUp') idx = Math.max(0, idx - 1);
+    else if (key === 'Home') idx = 0;
+    else if (key === 'End') idx = items.length - 1;
+    state.keyboardFocusIndex = idx;
+    items.forEach((el, i) => el.classList.toggle('keyboard-focus', i === idx));
+    const target = items[idx];
+    if (target) target.scrollIntoView({ block: 'nearest' });
+}
+
+/**
+ * Handles search functionality in the modal.
+ * 搜索基于缓存的全量收藏数据跨页匹配，而非仅过滤当前页 DOM；
+ * 输入关键词时显示全部匹配结果（隐藏分页），清空后恢复当前页分页渲染。
+ * 标签筛选与搜索叠加：先按激活标签过滤，再按关键词匹配。
+ */
+export async function handleSearchInModal(query) {
     const searchFilter = state.modalElement.querySelector(`.${SEARCH_FILTER_CLASS}`);
     const filterByNote = searchFilter.classList.contains('active');
 
-    const allItems = state.modalBodyElement.querySelectorAll('.favorite-item');
-    allItems.forEach(item => {
-        let content = '';
-        if (filterByNote) {
-            const noteEl = item.querySelector('.fav-note-content');
-            content = noteEl ? noteEl.textContent.toLowerCase() : '';
-        } else {
-            const previewEl = item.querySelector('.fav-preview');
-            const noteEl = item.querySelector('.fav-note-content');
-            const previewText = previewEl ? previewEl.textContent.toLowerCase() : '';
-            const noteText = noteEl ? noteEl.textContent.toLowerCase() : '';
-            content = previewText + ' ' + noteText;
-        }
+    // 搜索词为空：退出搜索模式，恢复当前页正常渲染（含分页）
+    if (!query) {
+        await renderFavoritesView(state.currentViewingChatFile);
+        return;
+    }
 
-        if (content.includes(query)) {
-            item.style.display = 'flex';
-        } else {
-            item.style.display = 'none';
+    // 从缓存的全量收藏数据中跨页匹配（先应用标签筛选，再按关键词过滤）
+    const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === String(state.currentViewingChatFile || '').replace('.jsonl', ''));
+    const allFavorites = getFilteredFavorites(chatData);
+    const messages = chatData?.messages || [];
+
+    const results = allFavorites.filter(fav => {
+        const noteText = (fav.favoritedSwipes || []).map(s => s.note || '').join(' ').toLowerCase();
+        if (filterByNote) {
+            return noteText.includes(query);
         }
+        // 匹配备注 + 当前收藏 swipe 的正文
+        const msg = messages[parseInt(fav.messageId, 10)];
+        const activeSwipe = fav.favoritedSwipes?.[0];
+        let msgText = '';
+        if (msg) {
+            msgText = (activeSwipe && msg.swipes && msg.swipes[activeSwipe.swipeId] !== undefined) ? msg.swipes[activeSwipe.swipeId] : (msg.mes || '');
+        }
+        return noteText.includes(query) || msgText.toLowerCase().includes(query);
+    });
+
+    // 传原始大小写的关键词用于高亮显示
+    const rawQuery = state.modalElement.querySelector(`.${SEARCH_INPUT_CLASS}`)?.value || query;
+    await renderSearchResults(results, chatData, rawQuery);
+}
+
+/**
+ * 渲染跨页搜索结果列表（隐藏分页，顶部显示匹配数量）。
+ * @param {string} [highlightQuery] - 高亮关键词（保留原始大小写）
+ */
+async function renderSearchResults(results, chatData, highlightQuery = '') {
+    let mainPanel = state.modalBodyElement.querySelector('.favorites-main-panel');
+    if (!mainPanel) {
+        mainPanel = document.createElement('div');
+        mainPanel.className = 'favorites-main-panel';
+        state.modalBodyElement.appendChild(mainPanel);
+    }
+
+    let listHtml = '';
+    if (results.length === 0) {
+        listHtml = `<div class="favorites-empty">没有匹配的收藏。</div>`;
+    } else {
+        const messages = chatData?.messages || [];
+        for (let i = 0; i < results.length; i++) {
+            const fav = results[i];
+            const msg = messages[parseInt(fav.messageId, 10)] || null;
+            listHtml += await renderFavoriteItem(fav, i, msg, highlightQuery);
+        }
+    }
+
+    mainPanel.innerHTML = `
+        <div class="favorites-search-info">共找到 ${results.length} 条匹配收藏</div>
+        <div class="favorites-list">${listHtml}</div>
+        <div class="favorites-pagination"></div>
+    `;
+
+    const favoritePreviews = mainPanel.querySelectorAll('.fav-preview');
+    favoritePreviews.forEach(previewElement => {
+        renderIframesInElement($(previewElement));
     });
 }
 
@@ -260,6 +522,8 @@ export async function openFavoritesModal() {
         state.currentViewingChatFile = null;
         state.allChatsFavoritesData = [];
         state.isLoadingOtherChats = false;
+        state.activeTagFilter = null;
+        state.keyboardFocusIndex = -1;
         state.modalBodyElement.innerHTML = '<div class="spinner"></div>';
 
         // Reset UI elements
@@ -283,6 +547,7 @@ export async function openFavoritesModal() {
 
     window.addEventListener('resize', centerModal);
     favDoc.addEventListener('keydown', handleEscKey);
+    favDoc.addEventListener('keydown', handleFavoritesNavKeydown);
 
     // 后台静默预加载角色收藏数据，让「切换角色」秒开
     preloadCharacterFavorites().catch(() => {});
@@ -319,9 +584,13 @@ export function closeFavoritesModal() {
     // 取消后台角色收藏预加载
     abortPreload();
 
+    // 关闭可能残留的标签筛选下拉菜单
+    closeTagFilterMenu();
+
     // Clean up event listeners
     window.removeEventListener('resize', centerModal);
     favDoc.removeEventListener('keydown', handleEscKey);
+    favDoc.removeEventListener('keydown', handleFavoritesNavKeydown);
 }
 
 /**
@@ -337,13 +606,17 @@ export async function handleEscKey(event) {
         return;
     }
 
+    // --- 优先级 0.5: 关闭标签筛选下拉菜单 ---
+    if (document.getElementById('star-tag-filter-menu')) {
+        closeTagFilterMenu();
+        return;
+    }
+
     // --- 优先级 1: 关闭最顶层的"设置"小菜单 ---
-    // 这个菜单是覆盖在所有东西之上的，所以最先检查它。
-    const optionsMenuOverlay = document.getElementById('star-options-menu-overlay');
-    if (optionsMenuOverlay) {
-        // 这个菜单没有独立的关闭函数，最直接的方式是移除其DOM元素。
-        // 由于它是在 showAvatarLongPressMenu 中动态创建的，移除是安全的。
-        optionsMenuOverlay.remove();
+    // 必须走 closeAvatarLongPressMenu() 完整清理：恢复主遮罩 backdrop-filter、
+    // 移除 resize 监听。直接 remove DOM 会残留样式与监听器。
+    if (document.getElementById('star-options-menu-overlay')) {
+        closeAvatarLongPressMenu();
         return; // 处理完毕，停止后续检查
     }
 
@@ -386,6 +659,9 @@ export async function handleEscKey(event) {
  * Renders the favorites view with the specified chat's favorites.
  */
 export async function renderFavoritesView(selectedChatFileName = null) {
+    // 切换聊天/角色时若标签筛选菜单还开着，一并关闭（防止残留遮住新内容）
+    closeTagFilterMenu();
+
     const context = getContext();
     const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
     const selectedChatFileNameNoExt = selectedChatFileName ? String(selectedChatFileName).replace('.jsonl', '') : null;
@@ -446,6 +722,11 @@ export async function renderFavoritesView(selectedChatFileName = null) {
 
     const favoritesArray = viewingChatData.metadata?.favorites || [];
     const totalFavorites = favoritesArray.length;
+
+    // 清理加载指示器：openFavoritesModal / 「聊天未缓存」分支 / switchToCharacter 设置的 spinner，
+    // 渲染完成前必须移除，否则会残留为空占位块挤占布局
+    const staleSpinner = state.modalBodyElement.querySelector('.spinner');
+    if (staleSpinner) staleSpinner.remove();
 
     // --- Render sidebar and main content ---
     renderChatListPanel(); // Update the chat list panel separately
@@ -543,7 +824,8 @@ export async function renderMainPanel(viewingChatData) {
         state.modalBodyElement.appendChild(mainPanel);
     }
 
-    const favoritesArray = viewingChatData.metadata?.favorites || [];
+    // 应用标签筛选（右上角标签图标激活时只显示该标签的收藏）
+    const favoritesArray = getFilteredFavorites(viewingChatData);
     const totalFavorites = favoritesArray.length;
 
     const sortedFavorites = [...favoritesArray].sort((a, b) => parseInt(a.messageId) - parseInt(b.messageId));
@@ -569,6 +851,9 @@ export async function renderMainPanel(viewingChatData) {
             }
         }
     }
+
+    // 主面板重渲染后清除键盘导航焦点（列表已重建，旧高亮随 innerHTML 一并消失）
+    state.keyboardFocusIndex = -1;
 
     const mainPanelHtml = `
         <div class="favorites-list">
@@ -666,6 +951,76 @@ export async function loadOtherChatsInBackground() {
  * 用深拷贝填充 allChatsFavoritesData，避免后续编辑/增删操作污染全局扫描缓存。
  * @param {object} charEntry - 来自 scanAllCharactersForFavorites 的角色条目
  */
+/**
+ * 按需加载单个聊天数据（供 switchToCharacter 使用）。
+ * @returns {object|null} 该聊天的完整数据（含 metadata/favorites/messages），无收藏返回 null
+ */
+async function loadSingleChatData(chat, charEntry, signal) {
+    // characterId 可能因会话内角色增删导致下标漂移，回退用角色名重新定位
+    let characterId = charEntry.characterId !== undefined ? charEntry.characterId : null;
+    if (!charEntry.isGroup && characterId !== null) {
+        const context = getContext();
+        if (!context.characters || !context.characters[characterId]) {
+            const byName = (context.characters || []).findIndex(ch => ch && ch.name === charEntry.name);
+            if (byName >= 0) characterId = byName;
+        }
+    }
+
+    const fullChatData = await getFullChatData(
+        characterId,
+        charEntry.groupId !== undefined ? charEntry.groupId : null,
+        chat.fileName,
+        !!charEntry.isGroup,
+        null,
+        { signal }
+    );
+    if (fullChatData && (fullChatData.metadata?.favorites?.length > 0)) {
+        return {
+            fileName: chat.fileName,
+            displayName: chat.displayName || chat.fileName,
+            metadata: fullChatData.metadata,
+            favorites: fullChatData.metadata.favorites || [],
+            messages: fullChatData.messages || [],
+            isGroup: !!charEntry.isGroup,
+            characterId,
+            groupId: charEntry.groupId !== undefined ? charEntry.groupId : null,
+        };
+    }
+    return null;
+}
+
+/**
+ * 后台并行加载该角色「第一个聊天之外」的有收藏聊天，加载完成后并入侧栏列表。
+ * 复用 switchToCharacter 传入的 AbortController，完成或取消时自行清理 backgroundLoadController。
+ */
+async function loadRestChatsInBackground(restChats, charEntry, controller) {
+    try {
+        const loaded = await Promise.all(restChats.map(async (chat) => {
+            if (controller.signal.aborted) return null;
+            return loadSingleChatData(chat, charEntry, controller.signal);
+        }));
+        if (controller.signal.aborted) return;
+        const valid = loaded.filter(Boolean);
+        if (valid.length > 0) {
+            // 去重合并（首个聊天已在 allChatsFavoritesData）
+            const existing = new Set(state.allChatsFavoritesData.map(c => c.fileName));
+            valid.forEach(data => {
+                if (!existing.has(data.fileName)) state.allChatsFavoritesData.push(data);
+            });
+        }
+    } catch (error) {
+        if (!isAbortError(error, controller.signal)) {
+            Logger.error('后台加载该角色其余聊天失败:', error);
+        }
+    } finally {
+        if (backgroundLoadController === controller) {
+            backgroundLoadController = null;
+        }
+        state.isLoadingOtherChats = false;
+        renderChatListPanel();
+    }
+}
+
 export async function switchToCharacter(charEntry) {
     Logger.info(`切换到角色收藏: ${charEntry.name}（${charEntry.totalFavorites} 条）`);
 
@@ -674,46 +1029,74 @@ export async function switchToCharacter(charEntry) {
         return;
     }
 
-    // 深拷贝：metadata / favorites / messages 都需独立副本，防止编辑后写回污染扫描缓存
-    state.allChatsFavoritesData = charEntry.chatsWithFavorites.map(c => {
-        const metadataCopy = JSON.parse(JSON.stringify(c.metadata));
-        const messagesCopy = JSON.parse(JSON.stringify(c.messages));
-        return {
-            fileName: c.fileName,
-            displayName: c.displayName || c.fileName,
-            metadata: metadataCopy,
-            favorites: metadataCopy.favorites || [],
-            messages: messagesCopy,
-            isGroup: !!charEntry.isGroup,
-            characterId: charEntry.characterId !== undefined ? charEntry.characterId : null,
-            groupId: charEntry.groupId !== undefined ? charEntry.groupId : null,
-        };
-    });
+    // 扫描索引是轻量的（只含「有收藏的聊天」列表，不含完整消息/收藏数据）。
+    // 优化：先加载收藏最多的第一个聊天立即渲染（秒开），其余聊天后台并行加载。
+    abortBackgroundLoad();
+    if (state.modalBodyElement) state.modalBodyElement.innerHTML = '<div class="spinner"></div>';
+    const controller = new AbortController();
+    backgroundLoadController = controller;
 
-    // 切换到收藏最多的那个聊天
-    state.currentViewingChatFile = state.allChatsFavoritesData[0].fileName;
-    state.currentPage = 1;
+    const chatList = charEntry.chatsWithFavorites;   // 扫描时已按收藏数降序，首个为收藏最多
+    const [firstChat, ...restChats] = chatList;
 
-    // 重置搜索状态（避免切换后搜索框仍展开导致布局错位）
-    if (state.modalElement) {
-        const searchContainer = state.modalElement.querySelector('.favorites-search-container');
-        const searchInput = state.modalElement.querySelector('.favorites-search-input');
-        if (searchContainer) searchContainer.classList.remove('expanded');
-        if (searchInput) searchInput.value = '';
+    try {
+        // 1. 先加载第一个聊天并立即渲染（秒开）
+        const firstFull = await loadSingleChatData(firstChat, charEntry, controller.signal);
+        if (controller.signal.aborted) {
+            if (backgroundLoadController === controller) backgroundLoadController = null;
+            return;
+        }
+        if (!firstFull) {
+            if (backgroundLoadController === controller) backgroundLoadController = null;
+            if (state.modalBodyElement) state.modalBodyElement.innerHTML = '<div class="favorites-empty">该角色没有收藏。</div>';
+            return;
+        }
+        state.allChatsFavoritesData = [firstFull];
+        state.currentViewingChatFile = firstFull.fileName;
+        state.currentPage = 1;
+
+        // 重置搜索状态（避免切换后搜索框仍展开导致布局错位）
+        if (state.modalElement) {
+            const searchContainer = state.modalElement.querySelector('.favorites-search-container');
+            const searchInput = state.modalElement.querySelector('.favorites-search-input');
+            if (searchContainer) searchContainer.classList.remove('expanded');
+            if (searchInput) searchInput.value = '';
+        }
+
+        // 标题先置为角色名（renderFavoritesView 内部也会按 characterId 重设标题，结果一致）
+        if (state.modalTitleElement) state.modalTitleElement.textContent = charEntry.name;
+
+        await renderFavoritesView(state.currentViewingChatFile);
+
+        // 2. 其余聊天后台加载（不阻塞已渲染内容）
+        if (restChats.length > 0) {
+            state.isLoadingOtherChats = true;
+            renderChatListPanel(); // 侧栏显示加载占位
+            loadRestChatsInBackground(restChats, charEntry, controller);
+        } else {
+            // 仅一个聊天，无需后台加载，直接清理 controller
+            if (backgroundLoadController === controller) {
+                backgroundLoadController = null;
+            }
+        }
+
+        toastr.info(`已切换到「${charEntry.name}」的收藏`, '', { timeOut: 1500 });
+    } catch (error) {
+        if (!isAbortError(error, controller.signal)) {
+            Logger.error('切换角色加载收藏失败:', error);
+            toastr.error('加载该角色的收藏失败');
+        }
+        if (backgroundLoadController === controller) {
+            backgroundLoadController = null;
+        }
     }
-
-    // 标题先置为角色名（renderFavoritesView 内部也会按 characterId 重设标题，结果一致）
-    if (state.modalTitleElement) state.modalTitleElement.textContent = charEntry.name;
-
-    await renderFavoritesView(state.currentViewingChatFile);
-
-    toastr.info(`已切换到「${charEntry.name}」的收藏`, '', { timeOut: 1500 });
 }
 
 /**
  * Renders a single favorite item.
+ * @param {string} [highlightQuery] - 搜索高亮关键词（传入时对备注与正文做 mark 高亮）
  */
-export async function renderFavoriteItem(favItem, index, originalMessage = null) {
+export async function renderFavoriteItem(favItem, index, originalMessage = null, highlightQuery = '') {
     if (!favItem || !favItem.favoritedSwipes || favItem.favoritedSwipes.length === 0) return '';
     const isUserMessage = originalMessage ? originalMessage.is_user : favItem.role === 'user';
     const roleClass = isUserMessage ? 'role-user' : 'role-ai';
@@ -743,7 +1126,15 @@ export async function renderFavoriteItem(favItem, index, originalMessage = null)
         deletedClass = 'deleted';
     }
 
-    const noteHtml = note ? `<div class="fav-note-content">${note}</div>` : '<div class="fav-note-content"></div>';
+    // 搜索高亮：备注（纯文本）与正文（格式化 HTML）都做关键词高亮
+    let noteContentHtml = escapeHtml(note);
+    if (highlightQuery) {
+        noteContentHtml = highlightInHtml(noteContentHtml, highlightQuery);
+        previewText = highlightInHtml(previewText, highlightQuery);
+    }
+    const noteHtml = note ? `<div class="fav-note-content">${noteContentHtml}</div>` : '<div class="fav-note-content"></div>';
+
+    // 标签不显示在卡片上（卡片头部位置留给备注），仅作为右上角筛选的凭证
 
     let reasoningHtml = '';
     if (originalMessage && originalMessage.extra && originalMessage.extra.reasoning) {
@@ -788,6 +1179,7 @@ export async function renderFavoriteItem(favItem, index, originalMessage = null)
                         <i class="fa-solid fa-expand" title="查看上下文"></i>
                         <i class="fa-solid fa-pencil" title="编辑原文"></i>
                         <i class="fa-solid fa-feather-pointed" title="编辑备注"></i>
+                        <i class="fa-solid fa-tags" title="编辑标签"></i>
                         <i class="fa-solid fa-trash" title="取消收藏"></i>
                         <i class="fa-solid fa-ellipsis-vertical fav-action-more" title="更多操作"></i>
                     </div>
@@ -935,7 +1327,7 @@ export async function handleModalClick(event) {
 		}
 
 		// 动态导入core.js中的函数以避免循环依赖
-		const { handleEditNote, handleDeleteFavoriteFromPopup, handleEditMessageContent } = await import('../core.js');
+		const { handleEditNote, handleDeleteFavoriteFromPopup, handleEditMessageContent, handleEditTags } = await import('../core.js');
 		// 动态导入preview.js中的函数
 		const { enterPreviewMode } = await import('./preview.js');
 
@@ -943,6 +1335,8 @@ export async function handleModalClick(event) {
 			await handleViewContext(msgId, state.currentViewingChatFile, activeSwipeId);
 		} else if (target.classList.contains('fa-feather-pointed')) {
 			await handleEditNote(favId, state.currentViewingChatFile);
+		} else if (target.classList.contains('fa-tags')) {
+			await handleEditTags(favId, state.currentViewingChatFile);
 		} else if (target.classList.contains('fa-trash')) {
 			await handleDeleteFavoriteFromPopup(favId, msgId, state.currentViewingChatFile);
 		} else if (target.classList.contains('fa-eye')) {
@@ -1122,7 +1516,7 @@ export function showMobileActionsMenu(targetIcon, favId, msgId, activeSwipeId) {
         menu.removeAttribute('data-star-theme');
     }
 
-    // 渲染内部HTML
+    // 渲染内部HTML（标签功能暂为测试功能，未列入移动端菜单）
     menu.innerHTML = `
         <div class="star-mobile-actions-item" data-action="pencil">
             <i class="fa-solid fa-pencil"></i> 编辑原文

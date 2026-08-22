@@ -9,7 +9,6 @@ import { ensureFavoritesArrayExists, ensureCurrentChatIsCached } from '../core.j
 import { applySavedTheme, showAvatarLongPressMenu, closeAvatarLongPressMenu, toggleTheme } from './settings.js';
 import { openCharacterSwitcher, closeCharacterSwitcher, preloadCharacterFavorites, abortPreload } from './character-switcher.js';
 import { handleViewContext, closeContextFrame } from './preview.js';
-import { toggleDebugPanel } from './debug.js';
 import Logger from '../Logger.js';
 import { shouldShowUpdateNotice, showUpdateNoticeDialog } from '../api.js';
 
@@ -497,11 +496,6 @@ export async function openFavoritesModal() {
  */
 export function closeFavoritesModal() {
     Logger.info('关闭收藏面板');
-
-    // 若调试日志面板已启用，随主弹窗一并关闭整个日志面板（隐藏图标、关闭弹窗、恢复日志级别）
-    if (state.debugPanel?.enabled) {
-        toggleDebugPanel();
-    }
 
     // 若 AI 答疑处于最小化状态（存在浮动恢复按钮），随主弹窗一并彻底关闭（中止流式、移除恢复按钮）
     if (document.getElementById('star-qa-restore-btn')) {

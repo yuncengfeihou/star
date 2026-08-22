@@ -258,7 +258,7 @@ export function addFavorite(messageInfo, targetChatFile = null) {
     // 直接存入 ST 原生的 swipe_info 中，ST 删 swipe 时，连带引索和文本一起火化
     message.swipe_info[swipeId].star_favorite = newItem;
     Logger.success(`addFavorite: 收藏成功, favId=${newItem.id}, msgId=${messageInfo.messageId}`);
-    // 收藏数变化，标记角色切换器缓存过期，下次打开重新扫描
+    // 收藏数变化：标记 TTL 内缓存有变更（仅作切换器 UI 提示，重扫由 TTL 时间驱动，见 ui/character-switcher.js）
     state.charactersCacheStale = true;
 
     const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
@@ -316,7 +316,7 @@ export function removeFavoriteById(favoriteId, targetChatFile = null) {
 
     if (removed) {
         Logger.success(`removeFavoriteById: 删除成功, favId=${favoriteId}`);
-        // 收藏数变化，标记角色切换器缓存过期
+        // 收藏数变化：标记 TTL 内缓存有变更（仅作切换器 UI 提示，重扫由 TTL 时间驱动）
         state.charactersCacheStale = true;
         const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
         if (chatDataInCache) {
@@ -370,7 +370,7 @@ export function updateFavoriteNote(favoriteId, note, targetChatFile = null) {
     }
 
     if (updated) {
-        // 备注内容变化，标记角色切换器缓存过期（缓存的 messages 里有旧备注）
+        // 备注内容变化：标记 TTL 内缓存有变更（仅作切换器 UI 提示，重扫由 TTL 时间驱动）
         state.charactersCacheStale = true;
         const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
         if (chatDataInCache) {
@@ -424,7 +424,7 @@ export function updateFavoriteTags(favoriteId, tags, targetChatFile = null) {
     }
 
     if (updated) {
-        // 标签内容变化，标记角色切换器缓存过期（缓存的 messages 里有旧标签）
+        // 标签内容变化：标记 TTL 内缓存有变更（仅作切换器 UI 提示，重扫由 TTL 时间驱动）
         state.charactersCacheStale = true;
         const virtualFavs = rebuildVirtualFavoritesCache(messagesArray);
         if (chatDataInCache) {

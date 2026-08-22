@@ -22,7 +22,8 @@ export const state = {
     // 角色切换器（跨角色浏览收藏）
     charactersWithFavorites: [],   // 全局扫描结果缓存：[{characterId, name, avatar, totalFavorites, chatsWithFavorites}]
     isScanningCharacters: false,   // 是否正在后台扫描所有角色
-    charactersCacheStale: false,   // 缓存是否过期（增删收藏后置 true，下次打开切换器时重新扫描）
+    charactersCacheStale: false,   // TTL 内是否有收藏变更（仅作 UI 提示，不触发刷新；是否重扫由 TTL 时间驱动）
+    charactersCacheTimestamp: 0,   // 上次扫描完成时间戳（0 = 从未扫描，TTL 判定依据）
 
     // 预览模式
     isPreviewingContext: false,

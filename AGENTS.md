@@ -45,7 +45,7 @@ star/
 | `settings.js` | 1252 | 设置：主题切换、头像长按菜单、上下文范围/分页设置、使用指南、截图设置 | `toggleTheme` `applySavedTheme` `showAvatarLongPressMenu` |
 | `screenshot.js` | 785 | 截图：选择弹窗、多消息截图、元素截图 | `captureScreenshotMessages` `captureElementScreenshot` |
 | `font-subset.js` | 938 | 字体子集化：接管截图字体处理，三级缓存（内存/IndexedDB/Worker），截图提速 7~8 倍 | `initFontSystem` `buildSvgFontCss` `customImageFetchFn` |
-| `debug.js` | 322 | 调试日志面板（浮动按钮 + 日志弹窗 + 级别筛选 + 导出） | `initDebugPanel` `toggleDebugPanel` |
+| `debug.js` | 322 | 调试日志面板（浮动按钮 + 日志弹窗 + 级别筛选 + 导出 + 最小化/彻底关闭） | `initDebugPanel` `toggleDebugPanel` |
 | `character-switcher.js` | 407 | 跨角色收藏切换器（底部抽屉，扫描有收藏的角色） | `openCharacterSwitcher` `preloadCharacterFavorites` |
 | `qa.js` | 1048 | AI 答疑面板（流式传输、自定义 API、思维链渲染） | `ensureQAStructure` `openQAPanel` |
 | `index.js` | 9 | Barrel 文件，统一导出全部 UI 模块 | — |
@@ -107,13 +107,17 @@ UI 层通过 `buildVirtualFavorites(messages)` 从消息数组动态构建虚拟
 - 截图支持预览模式内的消息选择弹窗、多消息截图、Canvas 尺寸上限 14000。
 
 ### 角色切换器
-`ui/character-switcher.js`：扫描所有角色/群组，列出「有收藏的角色」，点击切换收藏面板至该角色数据。扫描结果缓存在 `state.charactersWithFavorites`，增删收藏后置 `charactersCacheStale = true` 触发重新扫描。
+`ui/character-switcher.js`：扫描所有角色/群组，列出「有收藏的角色」，点击切换收藏面板至该角色数据。扫描结果缓存在 `state.charactersWithFavorites`，**缓存刷新由 TTL 时间驱动**（`SCAN_CACHE_TTL` 默认 10 分钟）：TTL 内即使有收藏变更（`charactersCacheStale = true`）也不自动重扫，仅提示可手动刷新；缓存过期后打开切换器时「旧数据先行 + 后台刷新」；刷新按钮始终强制重扫。
+- **扫描期间增量渲染**：`scanAllCharactersForFavorites` 通过 `options.onFound` 每发现一个有收藏的角色即回调，切换器边扫边渲染（进度条推进时列表同步增长），扫描期间即可搜索、点击切换，无需等 150s 全部完成。
+
+### 收藏面板后台加载
+打开收藏面板时 `loadOtherChatsInBackground` 调用 `getAllChatFavoritesForCurrentContext`（`api.js`），加载当前角色其余聊天的收藏。**增量加载缓存**：缓存（`state.allChatsFavoritesData`）中已有且 `favorites_updated_at` 未变化的聊天直接跳过（须匹配角色/群组身份），实现「面板二次打开秒开」（首次 ~3.7s → 二次 ~1.3s，仅剩后端 chat list 获取）。
 
 ### AI 答疑面板
-`ui/qa.js`：浮动按钮 + 聊天式面板，支持流式传输、思维链折叠渲染、自定义 API（`qaApiEndpoint`/`qaApiKey`/`qaModel`）。
+`ui/qa.js`：浮动按钮 + 聊天式面板，支持流式传输、思维链折叠渲染、自定义 API（`qaApiEndpoint`/`qaApiKey`/`qaModel`）。设置弹窗支持填入 API 地址与密钥后自动获取 /models 模型列表，点击模型输入框向上弹出下拉选择。
 
 ### 调试日志面板
-`ui/debug.js`：浮动按钮 + 日志弹窗，读取 `Logger.logHistory`，支持级别筛选、下载、清空、主题适配。
+`ui/debug.js`：浮动按钮 + 日志弹窗，读取 `Logger.logHistory`，支持级别筛选、下载、清空、主题适配。弹窗右上角 `-` 最小化（收起至左侧悬浮球，保留面板）与 `X` 彻底关闭（禁用面板、隐藏图标）；设置菜单「日志面板」仅负责启用，已启用时点击改为打开弹窗。
 
 ## 当前状态
 

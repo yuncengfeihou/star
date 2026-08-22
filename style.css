@@ -2094,8 +2094,9 @@ textarea.star-input-textarea.note-textarea {
     color: var(--star-text-main) !important;
 }
 
-/* --- 日志弹窗操作按钮（关闭 / 下载 / 清空）--- */
+/* --- 日志弹窗操作按钮（关闭 / 最小化 / 下载 / 清空）--- */
 .star-debug-modal-close,
+.star-debug-modal-minimize,
 .star-debug-modal-download,
 .star-debug-modal-clear {
     cursor: pointer;
@@ -2110,16 +2111,21 @@ textarea.star-input-textarea.note-textarea {
     flex-shrink: 0;
 }
 .star-debug-modal-close:hover,
+.star-debug-modal-minimize:hover,
 .star-debug-modal-download:hover,
 .star-debug-modal-clear:hover {
     background-color: var(--star-bg-hover) !important;
     transform: scale(1.1);
 }
 .star-debug-modal-close i,
+.star-debug-modal-minimize i,
 .star-debug-modal-download i,
 .star-debug-modal-clear i {
     color: var(--star-text-muted) !important;
     font-size: 15px;
+}
+.star-debug-modal-minimize:hover i {
+    color: var(--star-accent-primary) !important;
 }
 .star-debug-modal-download:hover i {
     color: var(--star-accent-primary) !important;
@@ -3210,6 +3216,49 @@ dialog {
 #star-qa-settings-overlay .star-qa-settings-hint {
     display: block !important; font-size: 11px !important; color: var(--star-text-sub) !important;
     margin-top: 4px !important; line-height: 1.4 !important;
+}
+
+/* 模型名称：自动获取下拉列表（默认向上延伸） */
+#star-qa-settings-overlay .star-qa-model-wrap {
+    position: relative !important;
+}
+#star-qa-settings-overlay .star-qa-model-dropdown {
+    position: absolute !important;
+    left: 0 !important; right: 0 !important;
+    bottom: calc(100% + 6px) !important;
+    max-height: 180px !important;
+    overflow-y: auto !important;
+    background-color: var(--star-bg-dialog) !important;
+    border: 1px solid var(--star-border-main) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2) !important;
+    z-index: 10 !important;
+    display: none !important;
+    padding: 4px !important;
+    box-sizing: border-box !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--star-border-input) transparent !important;
+}
+#star-qa-settings-overlay .star-qa-model-dropdown.show {
+    display: block !important;
+}
+#star-qa-settings-overlay .star-qa-model-dropdown-item {
+    padding: 8px 14px !important;
+    cursor: pointer !important;
+    font-size: 13px !important;
+    color: var(--star-text-main) !important;
+    font-family: monospace !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    border-radius: 6px !important;
+    border: none !important;
+    background: none !important;
+    margin: 0 !important;
+}
+#star-qa-settings-overlay .star-qa-model-dropdown-item:hover {
+    background-color: var(--star-bg-hover) !important;
+    color: var(--star-accent-primary) !important;
 }
 
 #star-qa-settings-overlay .star-qa-settings-footer {

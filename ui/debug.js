@@ -11,6 +11,7 @@ const DEBUG_MODAL_CONTAINER_CLASS = 'star-debug-modal-container';
 const DEBUG_MODAL_HEADER_CLASS = 'star-debug-modal-header';
 const DEBUG_MODEL_TITLE_CLASS = 'star-debug-modal-title';
 const DEBUG_MODAL_CLOSE_CLASS = 'star-debug-modal-close';
+const DEBUG_MODAL_MINIMIZE_CLASS = 'star-debug-modal-minimize';
 const DEBUG_MODAL_BODY_CLASS = 'star-debug-modal-body';
 const DEBUG_MODAL_DOWNLOAD_CLASS = 'star-debug-modal-download';
 const DEBUG_MODAL_CLEAR_CLASS = 'star-debug-modal-clear';
@@ -62,7 +63,10 @@ export function ensureDebugPanelStructure() {
                     <div class="${DEBUG_MODAL_DOWNLOAD_CLASS}" title="下载日志">
                         <i class="fa-solid fa-download"></i>
                     </div>
-                    <div class="${DEBUG_MODAL_CLOSE_CLASS}"><i class="fa-solid fa-xmark"></i></div>
+                    <div class="${DEBUG_MODAL_MINIMIZE_CLASS}" title="最小化">
+                        <i class="fa-solid fa-minus"></i>
+                    </div>
+                    <div class="${DEBUG_MODAL_CLOSE_CLASS}" title="关闭"><i class="fa-solid fa-xmark"></i></div>
                 </div>
                 <div class="${DEBUG_MODAL_BODY_CLASS}"></div>
             </div>
@@ -81,8 +85,11 @@ export function ensureDebugPanelStructure() {
             });
         }
 
-        // 关闭按钮
-        state.debugPanel.modalElement.querySelector(`.${DEBUG_MODAL_CLOSE_CLASS}`).addEventListener('click', closeDebugModal);
+        // 最小化按钮：收缩至左侧悬浮球状态（隐藏弹窗，保留 bug 图标）
+        state.debugPanel.modalElement.querySelector(`.${DEBUG_MODAL_MINIMIZE_CLASS}`).addEventListener('click', minimizeDebugModal);
+
+        // 关闭按钮：彻底关闭弹窗（关闭弹窗并禁用日志面板）
+        state.debugPanel.modalElement.querySelector(`.${DEBUG_MODAL_CLOSE_CLASS}`).addEventListener('click', shutdownDebugPanel);
 
         // 下载按钮
         state.debugPanel.modalElement.querySelector(`.${DEBUG_MODAL_DOWNLOAD_CLASS}`).addEventListener('click', downloadLogs);
@@ -109,34 +116,21 @@ export function ensureDebugPanelStructure() {
 export function toggleDebugPanel() {
     ensureDebugPanelStructure();
 
-    const isNowEnabled = !state.debugPanel.enabled;
-    state.debugPanel.enabled = isNowEnabled;
-
-    // 保存状态到 extension_settings
-    extension_settings[PLUGIN_NAME].debugPanelEnabled = isNowEnabled;
-    saveSettingsDebounced();
-
-    // 同步更新设置菜单中的文字（如果菜单当前可见）
-    const menuTextEl = document.getElementById('star-debug-menu-text');
-    if (menuTextEl) {
-        menuTextEl.textContent = isNowEnabled ? '关闭日志面板' : '启用日志面板';
-    }
-
-    if (isNowEnabled) {
-        // 启用时：显示 bug 图标，并将日志级别设为 FULL
+    if (!state.debugPanel.enabled) {
+        // 启用：显示 bug 图标，并将日志级别设为 FULL
+        state.debugPanel.enabled = true;
+        extension_settings[PLUGIN_NAME].debugPanelEnabled = true;
+        saveSettingsDebounced();
         state.debugPanel.iconElement.style.display = 'flex';
         Logger.setLogLevel(3); // LogLevel.FULL = 3
         Logger.info('🔍 调试日志面板已启用');
         toastr.info('调试日志面板已启用，点击左侧 🐛 图标查看日志');
     } else {
-        // 禁用时：隐藏 bug 图标，关闭弹窗，恢复默认日志级别
-        state.debugPanel.iconElement.style.display = 'none';
-        if (state.debugPanel.modalElement && state.debugPanel.modalElement.classList.contains('visible')) {
-            closeDebugModal();
-        }
-        Logger.setLogLevel(2); // 恢复 LogLevel.RUNTIME = 2
-        toastr.info('调试日志面板已关闭');
+        // 已启用：设置页面不再提供「关闭弹窗」功能，改为直接打开弹窗查看日志
+        openDebugModal();
     }
+
+    updateDebugMenuText();
 }
 
 // =================================================================
@@ -168,6 +162,44 @@ export function openDebugModal() {
 
     window.addEventListener('resize', centerDebugModal);
     document.addEventListener('keydown', handleDebugEscKey);
+}
+
+/**
+ * 最小化调试日志弹窗：收缩至左侧悬浮球（bug 图标）状态。
+ * 仅隐藏弹窗，保留 bug 图标与面板启用状态，可随时再次点开。
+ */
+export function minimizeDebugModal() {
+    closeDebugModal();
+}
+
+/**
+ * 彻底关闭调试日志弹窗：关闭弹窗并禁用日志面板（隐藏悬浮球、恢复默认日志级别）。
+ * 关闭能力由弹窗内关闭按钮承担，设置页面不再提供「关闭弹窗」入口。
+ */
+export function shutdownDebugPanel() {
+    closeDebugModal();
+    if (state.debugPanel.enabled) {
+        state.debugPanel.enabled = false;
+        extension_settings[PLUGIN_NAME].debugPanelEnabled = false;
+        saveSettingsDebounced();
+        if (state.debugPanel.iconElement) {
+            state.debugPanel.iconElement.style.display = 'none';
+        }
+        Logger.setLogLevel(2); // 恢复 LogLevel.RUNTIME = 2
+        Logger.info('🔍 调试日志面板已关闭');
+        updateDebugMenuText();
+        toastr.info('调试日志面板已关闭');
+    }
+}
+
+/**
+ * 同步设置菜单中「日志面板」项的文字（如果菜单当前可见）。
+ */
+function updateDebugMenuText() {
+    const menuTextEl = document.getElementById('star-debug-menu-text');
+    if (menuTextEl) {
+        menuTextEl.textContent = state.debugPanel.enabled ? '日志面板' : '启用日志面板';
+    }
 }
 
 /**

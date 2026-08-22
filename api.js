@@ -542,6 +542,23 @@ export async function getAllChatFavoritesForCurrentContext(skipCurrentChat = fal
             if (chatMeta.chat_metadata?.favorites_count === 0) {
                 continue;
             }
+            // 增量加载：缓存中已有且数据未变化的聊天直接跳过（「面板二次打开秒开」的关键）。
+            // 判断依据 favorites_updated_at：收藏写回时更新（见 saveSpecificChatMetadata），
+            // 缓存时间戳 >= 元数据时间戳 → 缓存新鲜，跳过本次加载。
+            // 必须同时匹配角色/群组身份，避免跨角色浏览后误跳过其他角色的聊天；
+            // 群组聊天列表不带 chat_metadata（无 favorites_updated_at）→ 不命中，保持全量判断。
+            const cachedChat = state.allChatsFavoritesData.find(c => {
+                if (String(c.fileName).replace('.jsonl', '') !== chatFileNameNoExt) return false;
+                if (!!c.isGroup !== !!context.groupId) return false;
+                return c.isGroup ? c.groupId === context.groupId : c.characterId === context.characterId;
+            });
+            const cachedUpdatedAt = cachedChat?.metadata?.favorites_updated_at;
+            const metaUpdatedAt = chatMeta.chat_metadata?.favorites_updated_at;
+            if (cachedChat && Array.isArray(cachedChat.messages)
+                && typeof cachedUpdatedAt === 'number' && typeof metaUpdatedAt === 'number'
+                && metaUpdatedAt <= cachedUpdatedAt) {
+                continue;
+            }
             let fullChatData;
             try {
                 fullChatData = await getFullChatData(context.characterId, context.groupId, chatFileNameNoExt, !!context.groupId, chatMeta, { signal: options.signal });
@@ -772,7 +789,7 @@ export async function saveSpecificChatMetadata(chatFileNameNoExt, metadataToSave
                 chatDataInCache.favorites = metadataToSave.favorites || [];
                 chatDataInCache.messages = JSON.parse(JSON.stringify(messagesArray));
             }
-            // 标记角色收藏缓存过期，下次打开切换器时自动刷新
+            // 标记 TTL 内缓存有变更（仅作切换器 UI 提示，重扫由 TTL 时间驱动，见 ui/character-switcher.js）
             state.charactersCacheStale = true;
             return;
         } catch (error) {
@@ -804,7 +821,8 @@ export async function saveSpecificChatMetadata(chatFileNameNoExt, metadataToSave
 export async function scanAllCharactersForFavorites(onProgress, options = {}) {
     const context = getContext();
     if (!context || !context.characters) return [];
-
+    // 增量回调：每发现一个有收藏的角色/群组即触发，供 UI 边扫边渲染（扫描期间即可搜索/切换）
+    const { onFound } = options;
     const characters = context.characters;
     const groups = context.groups || [];
     const result = [];
@@ -892,10 +910,12 @@ export async function scanAllCharactersForFavorites(onProgress, options = {}) {
         if (chatsWithFavorites.length > 0) {
             chatsWithFavorites.sort((a, b) => b.favoritesCount - a.favoritesCount);
             const totalFavorites = chatsWithFavorites.reduce((s, c) => s + c.favoritesCount, 0);
-            result.push({
+            const entry = {
                 characterId: i, name: ch.name, avatar: ch.avatar, isGroup: false,
                 totalFavorites, chatsWithFavorites,
-            });
+            };
+            result.push(entry);
+            onFound?.(entry);
         }
     }
 
@@ -934,10 +954,12 @@ export async function scanAllCharactersForFavorites(onProgress, options = {}) {
         if (chatsWithFavorites.length > 0) {
             chatsWithFavorites.sort((a, b) => b.favoritesCount - a.favoritesCount);
             const totalFavorites = chatsWithFavorites.reduce((s, c) => s + c.favoritesCount, 0);
-            result.push({
+            const entry = {
                 characterId: null, name: grp.name || '未命名群聊', avatar: grp.avatar || '', groupId: grp.id, isGroup: true,
                 totalFavorites, chatsWithFavorites,
-            });
+            };
+            result.push(entry);
+            onFound?.(entry);
         }
     }
 

@@ -182,7 +182,7 @@ export function showAvatarLongPressMenu() {
             <div class="star-options-group-label">其他</div>
             <div class="star-options-menu-item" data-action="toggle-debug-panel">
                 <i class="fa-solid fa-bug star-options-item-icon"></i>
-                <span class="star-options-item-label" id="star-debug-menu-text">日志面板</span>
+                <span class="star-options-item-label" id="star-debug-menu-text">${debugEnabled ? '日志面板' : '启用日志面板'}</span>
                 <span class="star-options-item-value">${debugEnabled ? '已启用' : '已关闭'}</span>
             </div>
             <div class="star-options-menu-item" data-action="usage-guide">
@@ -379,7 +379,7 @@ export function showShortcutInfoPopup() {
         <div class="star-settings-description">
             <p><b>Alt + S</b>：一键收藏 / 取消收藏当前聊天最后一条消息（输入框内不生效，预览模式下不触发）。</p>
             <p><b>Alt + F</b>：快速打开 / 关闭收藏面板。</p>
-            <p><b>Esc</b>：逐层关闭弹窗——子弹窗（确认 / 输入 / 标签 / 编辑器 / AI 答疑 / 调试 / 截图选择 / 使用指南等）优先关闭，最后才关收藏面板主窗口。</p>
+            <p><b>Esc</b>：逐层关闭弹窗——子弹窗（确认 / 输入 / 编辑器 / AI 答疑 / 调试 / 截图选择 / 使用指南等）优先关闭，最后才关收藏面板主窗口。</p>
         </div>
     `;
     showTextModal(popupHtml, '快捷键说明', { title: '快捷键说明', okButton: '知道了', wide: false });
@@ -525,9 +525,10 @@ const sectionContents = {
             </div>
 
             <h3>打开设置菜单</h3>
-            <p>有<strong>两种方式</strong>打开设置菜单：</p>
+            <p>有<strong>三种方式</strong>打开设置菜单：</p>
             <ul>
                 <li><strong>长按</strong>左上角的头像（约 0.6 秒）。</li>
+                <li><strong>右键</strong>点击左上角的头像。</li>
                 <li>点击左侧边栏底部的<strong>齿轮图标</strong> <i class="fa-solid fa-gear"></i>。</li>
             </ul>
             <p>在设置菜单中，你可以修改上下文范围、调整每页收藏数、打开截图设置、查看使用说明等。</p>
@@ -540,6 +541,7 @@ const sectionContents = {
             <ol>
                 <li>点击右上角的<strong>放大镜图标</strong> <i class="fa-solid fa-magnifying-glass"></i>，搜索框会从右侧滑出。</li>
                 <li>在搜索框中<strong>输入关键词</strong>，收藏列表会实时过滤，只显示匹配的条目。</li>
+                <li>搜索基于<strong>全部收藏跨页匹配</strong>（不受当前页限制），显示结果时隐藏分页并提示匹配数量；清空关键词后恢复分页显示。</li>
                 <li>清空搜索框后，所有收藏恢复显示。</li>
                 <li>点击搜索框外的区域，搜索框会自动收起。</li>
             </ol>
@@ -574,7 +576,7 @@ const sectionContents = {
             <p>在主聊天界面中<strong>临时加载</strong>该收藏消息及其前后几条消息的上下文对话：</p>
             <ul>
                 <li>进入预览模式后，聊天区域会显示收藏消息附近的对话。</li>
-                <li>右侧会出现一个 <i class="fa-solid fa-star"></i> 按钮，点击可<strong>快速打开收藏面板</strong>，在面板中点击另一条收藏的预览按钮可以<strong>快速切换</strong>预览内容。</li>
+                <li>右侧会出现一个 <i class="fa-solid fa-eye"></i> <strong>面板按钮</strong>，点击可<strong>快速打开收藏面板</strong>，在面板中点击另一条收藏的预览按钮可以<strong>快速切换</strong>预览内容。</li>
                 <li>点击页面底部的<strong>“结束预览”</strong>按钮可退出预览模式，返回正常聊天。</li>
                 <li>预览模式下<strong>不能发送新消息</strong>。</li>
             </ul>
@@ -645,7 +647,7 @@ const sectionContents = {
             <h3>退出预览模式</h3>
             <ul>
                 <li>点击底部的<strong>“结束预览”</strong>按钮。</li>
-                <li>预览模式下按 <strong>Escape 键</strong>也会退出。</li>
+                <li><strong>切换聊天</strong>也会自动退出预览（预览模式下按 Escape 键不会退出，Escape 只用于关闭各类弹窗）。</li>
                 <li>退出后，聊天区域恢复为正常的聊天状态。</li>
             </ul>
 
@@ -719,7 +721,7 @@ const sectionContents = {
                 <li>点击 Bug 图标打开日志窗口，可查看运行日志。</li>
                 <li>支持按日志级别筛选（INFO/SUCCESS/WARN/ERROR/DEBUG）。</li>
                 <li>可下载日志文件或清空日志记录。</li>
-                <li>再次点击“关闭日志面板”可隐藏 Bug 图标。</li>
+                <li>日志窗口右上角：点击 <strong>- 最小化</strong> 可收起弹窗（保留 Bug 图标，可随时再点开）；点击 <strong>X 关闭</strong> 则彻底关闭日志面板并隐藏 Bug 图标。</li>
             </ul>
         `,
         update: `
@@ -740,7 +742,7 @@ const sectionContents = {
             <h2>❓ 常见问题</h2>
 
             <h3>Q: 收藏的数据存储在哪里？</h3>
-            <p>收藏数据存储在<strong>聊天文件</strong>（<code>.jsonl</code>）的元数据（<code>chatMetadata.favorites</code>）中，与聊天记录一同保存在 SillyTavern 服务端的 <code>chats/</code> 目录下。插件设置（主题、每页数量等）则保存在 <code>settings_extension</code> 中。</p>
+            <p>收藏数据存储在<strong>聊天文件</strong>（<code>.jsonl</code>）中每条消息的 <code>swipe_info</code> 结构里（<code>swipe_info[swipeId].star_favorite</code>），与聊天记录一同保存在 SillyTavern 服务端的 <code>chats/</code> 目录下。界面上的 <code>chatMetadata.favorites</code> 只是运行时虚拟缓存，不会写入文件。插件设置（主题、每页数量等）则保存在 <code>settings_extension</code> 中。</p>
             <p>删除聊天文件会导致该聊天的收藏数据一并丢失，请定期备份。</p>
 
             <h3>Q: 为什么有些消息没有星标图标？</h3>

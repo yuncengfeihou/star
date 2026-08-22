@@ -9,6 +9,20 @@ import { scanAllCharactersForFavorites, isAbortError } from '../api.js';
 
 const SWITCHER_ID = 'star-character-switcher';
 
+// 扫描结果缓存有效期（TTL）：TTL 内不自动重扫，避免「收藏一次 → 打开切换器 → 立即 150s 全量扫描」的
+// 频繁触发（大环境下全量扫描可达 150s）。缓存过期后才自动后台刷新；手动点击刷新按钮始终强制重扫。
+// 有收藏变更时（charactersCacheStale=true）仅提示用户可手动刷新，不自动触发扫描。
+const SCAN_CACHE_TTL = 10 * 60 * 1000;
+
+/**
+ * 扫描缓存是否在 TTL 有效期内。
+ * 从未扫描（timestamp=0）或超过 TTL 视为过期。
+ */
+function isScanCacheFresh() {
+    return state.charactersCacheTimestamp > 0
+        && (Date.now() - state.charactersCacheTimestamp) < SCAN_CACHE_TTL;
+}
+
 // 扫描取消控制器（打开切换器时创建，关闭/刷新时 abort）
 let scanController = null;
 // 后台预加载取消控制器（收藏面板打开时启动，关闭时 abort）
@@ -67,8 +81,8 @@ function togglePinKey(key) {
  * 使用 AbortController 管理生命周期：关闭面板时取消。
  */
 export async function preloadCharacterFavorites() {
-    // 已有缓存且未过期则跳过
-    if (state.charactersWithFavorites.length > 0 && !state.charactersCacheStale) return;
+    // 已有缓存且 TTL 未过期则跳过（TTL 内即使有收藏变更也不重扫，避免频繁触发 150s 全量扫描）
+    if (state.charactersWithFavorites.length > 0 && isScanCacheFresh()) return;
     // 已在扫描中则跳过
     if (state.isScanningCharacters) return;
 
@@ -83,6 +97,7 @@ export async function preloadCharacterFavorites() {
         if (controller.signal.aborted) return;
         state.charactersWithFavorites = result;
         state.charactersCacheStale = false;
+        state.charactersCacheTimestamp = Date.now();
         Logger.debug(`后台预加载完成：${result.length} 个角色有收藏`);
     } catch (error) {
         if (!isAbortError(error, controller.signal)) {
@@ -155,7 +170,6 @@ export function openCharacterSwitcher() {
     frame.querySelector('.star-cs-backdrop').addEventListener('click', closeCharacterSwitcher);
     frame.querySelector('.star-cs-close').addEventListener('click', closeCharacterSwitcher);
     frame.querySelector('.star-cs-refresh').addEventListener('click', () => {
-        state.charactersCacheStale = true;
         renderList(frame, '');
         startScan(frame);
     });
@@ -229,11 +243,20 @@ export function openCharacterSwitcher() {
         frame.classList.add('visible');
     });
 
-    // 缓存有数据：动画前渲染好列表，动画丝滑
-    if (state.charactersWithFavorites.length > 0 && !state.charactersCacheStale) {
+    // 缓存有数据：动画前渲染好列表，动画丝滑。
+    // 分支说明：
+    //  1) 缓存新鲜且无收藏变更 → 直接显示，无提示；
+    //  2) 缓存新鲜但有变更 → 直接显示 + 轻提示（TTL 内不触发 150s 后台重扫，引导用户手动刷新）；
+    //  3) 缓存过期（超 TTL）→ 旧数据先行（秒开）+ 动画结束后后台刷新；
+    //  4) 无缓存 → 动画结束后扫描。
+    if (state.charactersWithFavorites.length > 0 && isScanCacheFresh() && !state.charactersCacheStale) {
         renderList(frame, '');
         const totalFavs = state.charactersWithFavorites.reduce((s, c) => s + c.totalFavorites, 0);
         updateStatus(frame, `共 <b>${state.charactersWithFavorites.length}</b> 个角色，<b>${totalFavs}</b> 条收藏`);
+    } else if (state.charactersWithFavorites.length > 0 && isScanCacheFresh()) {
+        // 缓存新鲜但有收藏变更：直接显示缓存（秒开），仅提示可手动刷新获取最新，不阻塞 UI。
+        renderList(frame, '');
+        updateStatus(frame, '显示缓存数据（有新的收藏变更，点击右上角 <i class="fa-solid fa-rotate"></i> 刷新获取最新）');
     } else if (state.charactersWithFavorites.length > 0) {
         // 缓存过期但有旧数据：先渲染旧数据（秒开），动画结束后后台刷新，不阻塞 UI。
         // （大环境下全量扫描可达 150s，若等扫描完再展示会让用户面对长时间空白。）
@@ -287,14 +310,25 @@ async function startScan(frame) {
     try {
         const result = await scanAllCharactersForFavorites((current, total, name) => {
             updateStatus(frame, `扫描中 <b>${current}/${total}</b>${name ? ' · ' + escapeHtml(name) : ''}`);
-            // 边扫边显示已发现的角色（提升感知速度）
-            if (!controller.signal.aborted) renderList(frame, frame.querySelector('.star-cs-search-input').value.toLowerCase().trim());
-        }, { signal: controller.signal });
+        }, {
+            signal: controller.signal,
+            // 边扫边渲染已发现的角色（增量），扫描期间即可搜索/点击切换，无需等 150s 全部完成
+            onFound: (entry) => {
+                const key = getCharacterKey(entry);
+                if (!state.charactersWithFavorites.some(c => getCharacterKey(c) === key)) {
+                    state.charactersWithFavorites.push(entry);
+                }
+                if (!controller.signal.aborted) {
+                    renderList(frame, frame.querySelector('.star-cs-search-input').value.toLowerCase().trim());
+                }
+            },
+        });
 
         if (controller.signal.aborted) return;
 
         state.charactersWithFavorites = result;
         state.charactersCacheStale = false;
+        state.charactersCacheTimestamp = Date.now();
         state.isScanningCharacters = false;
 
         renderList(frame, '');

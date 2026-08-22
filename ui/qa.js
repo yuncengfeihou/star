@@ -54,7 +54,7 @@ ${getUsageGuidePlainText()}
 
 ## 收藏管理面板
 - **打开方式**：点击 SillyTavern 聊天输入框左边的魔法棒🪄 →「收藏」按钮（或直接从收藏卡片的 👁️ 预览按钮重新打开）。
-- **标题栏**：左上角是当前角色/群组头像（**单击**展开/收起左侧边栏，**长按约 0.6 秒或右键**弹出设置菜单）；中间显示当前角色/群聊名；右侧依次是搜索框、关闭按钮（X）。
+- **标题栏**：左上角是当前角色/群组头像（**单击**展开/收起左侧边栏，**长按约 0.6 秒或右键**弹出设置菜单）；中间显示当前角色/群聊名；右侧是搜索框和关闭按钮（X）。
 - **左侧边栏**：列出所有有收藏的聊天（当前聊天即使没有收藏也会显示），每项显示聊天文件名+收藏数量徽标，选中的高亮；侧栏底部有「切换角色」按钮（fa-users 图标）、太阳/月亮主题切换按钮（title"切换主题"）、AI 答疑按钮（气泡图标，title"AI答疑助手"）和齿轮设置按钮（fa-gear，title"打开设置"）。
 - **主区域**：收藏卡片列表，按楼层号（消息索引）升序排列；底部有分页栏（收藏数超过每页数量时出现）。
 - **性能表现**：打开面板时当前聊天的收藏**立即**渲染显示，其他聊天的收藏在后台异步加载（侧栏显示"加载中..."占位）；切换聊天或角色时会自动取消未完成的加载，避免旧数据污染。
@@ -62,15 +62,17 @@ ${getUsageGuidePlainText()}
 ## 搜索
 - 搜索框占位文字为"检索收藏..."，点击放大镜图标展开搜索框并聚焦，输入即实时过滤；输入框失焦且内容为空时自动收起。
 - **默认同时搜索消息正文和备注**；点击搜索框左侧的漏斗图标（title"仅搜索备注"）激活后，**只搜索备注内容**（图标高亮表示已激活）。点击过滤按钮时不会让搜索框失焦收起。
+- 搜索基于缓存的全量收藏<strong>跨页匹配</strong>（不局限于当前页），结果显示时隐藏分页、顶部显示"共找到 N 条匹配收藏"；清空关键词后恢复分页渲染。
 
 ## 收藏卡片上的每个按钮（按图标说明）
 1. **👁️ 预览上下文**（fa-eye，title"预览上下文"）— 进入预览模式，在主聊天界面临时加载该消息及附近共 5 条消息。
-2. **⛶ 查看上下文**（fa-expand，title"查看上下文"）— 打开独立的"消息上下文"弹窗，显示前后 contextViewRange 条消息（默认前后各 1 条，共 3 条），支持单消息/列表两种模式切换，右上角可截图。
+2. **⛶ 查看上下文**（fa-expand，title"查看上下文"）— 打开独立的"消息上下文"弹窗，显示前后 contextViewRange 条消息（默认前后各 1 条，共 3 条），支持单消息/列表两种模式切换，右上角可截图；点击弹窗标题"消息上下文"可直接修改上下文范围（保存后需重新打开该弹窗生效）。
 3. **✏️ 编辑原文**（fa-pencil，title"编辑原文"）— 打开编辑器**永久修改**消息正文，可同时编辑"内心独白"（思维链）；修改会写入聊天文件并重载当前聊天，**不可撤销**。编辑器有两个区域：💭 内心独白 和 💬 消息正文，底部按钮为"取消"/"保存"。
 4. **🪶 编辑备注**（fa-feather-pointed，title"编辑备注"）— 编辑当前 Swipe 的备注。
 5. **🗑️ 取消收藏**（fa-trash，title"取消收藏"）— 弹出确认框"确定要取消这条收藏吗？"，确认后删除收藏（不删除原消息），成功提示"收藏已取消"。
 6. **⋮ 更多操作**（fa-ellipsis-vertical，title"更多操作"）— 移动端小屏设备上其他按钮隐藏时，通过它访问「编辑原文 / 编辑备注 / 取消收藏」三项。
 7. **‹ / › 箭头 + 1/N 计数** — 仅当同一消息有多个被收藏的 Swipe 时出现（title"上一个收藏的Swipe"/"下一个收藏的Swipe"），循环切换查看的 Swipe，备注和正文跟随切换。
+- 若消息含思维链（内心独白），卡片正文上方会显示可折叠的"💭 内心独白"区域。
 
 ## 分页与跳转
 - 收藏数超过每页数量时底部出现分页栏：‹ 上一页 / 页码 / › 下一页，当前页高亮；页码布局为第 1 页 + 当前页±2 + 末页，中间用省略号"..."表示。
@@ -79,13 +81,13 @@ ${getUsageGuidePlainText()}
 ## 跨角色浏览（角色切换器）
 - **入口**：收藏面板左侧边栏底部的「切换角色」按钮（fa-users 图标，title"切换角色（跨角色浏览收藏）"），从底部向上滑出抽屉。
 - 抽屉标题"切换角色"；右上角有刷新按钮（fa-rotate，title"重新扫描所有角色"）和关闭按钮；搜索框占位文字"搜索角色名…"（默认不聚焦，避免移动端弹出键盘）。
-- 自动扫描所有角色和群组（群组带"群"徽标），每项显示头像+角色名+"N 个聊天"+收藏总数徽标，按收藏总数降序排列。
-- 状态提示："正在准备扫描…"、扫描中"扫描中 x/y · 角色名"、完成"扫描完成：N 个角色，共 M 条收藏"、无结果"没有匹配的角色"。
+- 自动扫描所有角色和群组（群组带"群"徽标），每项显示头像+角色名+"N 个聊天"+收藏总数徽标。**排序规则**：当前聊天角色恒置顶（不显示置顶按钮）、手动置顶（图钉按钮）的角色次之，其余按收藏总数降序；置顶状态保存在插件设置中。
+- 状态提示："正在准备扫描…"、扫描中"扫描中 x/y · 角色名"、完成"扫描完成：N 个角色，共 M 条收藏"、全无收藏"没有找到任何收藏"、搜索无结果"没有匹配的角色"；缓存过期时先显示旧数据并提示"显示缓存数据，正在后台刷新…"。
 - 点击某个角色项立即切换到该角色的收藏（提示"已切换到「名字」的收藏"），**不会改变 SillyTavern 当前打开的聊天**。
 - 打开收藏面板时会在后台预扫描所有角色，让切换器"秒开"；增删收藏后缓存自动标记过期，下次打开会重新扫描。
 
 ## 预览模式
-- **进入**：点击收藏卡片的 👁️ 按钮（或查看上下文弹窗中的对应入口）。
+- **进入**：点击收藏卡片的 👁️ 按钮（进入后可在预览右侧的 👁️ 浮动按钮重新打开收藏面板，再点其他收藏的预览按钮无缝切换）。
 - **行为**：关闭收藏面板、隐藏顶部栏、**不能发送新消息**（底部输入框被替换为「结束预览」按钮）、固定加载收藏消息附近共 5 条消息（目标消息前后各 2 条）、自动滚动到目标消息。
 - **右侧浮动两个圆形按钮**：👁️（title"打开收藏面板"）重新打开收藏面板（可无缝切换查看其他收藏的预览）；📷（title"截图预览消息"）打开截图范围选择弹窗。
 - **退出方式**：点击「结束预览」按钮（挂载在输入区位置）、或切换聊天（自动退出预览）。注意：实际代码中 Escape 键不会退出预览模式（Escape 只用于关闭各类弹窗），建议使用"结束预览"按钮。
@@ -107,14 +109,15 @@ ${getUsageGuidePlainText()}
 - **弹出方式**：长按或右键收藏面板左上角头像，或点击侧栏底部齿轮（fa-gear）。菜单为**分组布局**，共 3 组，每项右侧显示当前状态值：
   1. **显示**：上下文范围（fa-arrows-left-right-to-line）— 决定"查看上下文"弹窗显示前后各几条消息（默认 1，即共 3 条；设为 2 显示前后各 2 条共 5 条；设为 0 只显示收藏消息本身）。**只影响"查看上下文"弹窗，预览模式固定加载 5 条**。右侧显示"前后各 N 条"。输入必须是非负整数，非法输入提示"请输入一个有效的非负整数。"并阻止关闭弹窗。每页收藏数（fa-list-ol）— 每页显示的收藏卡片数量（默认 10 条，建议 5~30，过大会影响加载性能），保存后立即刷新并重置到第一页。右侧显示"N 条"。输入必须为正整数（>0），非法提示"请输入一个有效的正整数。"。
   2. **功能**：截图设置（fa-image）— 打开"截图设置 — 缓存管理"弹窗：分「🔤 字体缓存」和「🖼️ 图片缓存」两个区块，显示缓存数量和占用大小；字体集可点击展开查看内部文件，**长按 600ms 删除**单条/单集；单击图片行可预览；右上角可一键清空全部字体或图片缓存。清空后下次截图会自动重新下载资源。快捷键（fa-keyboard）— Alt+S 收藏/取消收藏、Alt+F 开关面板，右侧显示"Alt+S / Alt+F"。
-  3. **其他**：日志面板（fa-bug）— 切换调试日志面板，右侧显示"已启用/已关闭"。启用后页面左侧出现🐛浮动图标（title"打开调试日志面板"），点击打开"调试日志"弹窗。使用说明（fa-book-open）— 打开内置帮助文档，含侧边导航（10 个章节：欢迎使用/基本操作/收藏面板/搜索与翻页/收藏项操作/预览模式/截图功能/主题与设置/更新插件/常见问题），移动端（≤768px）侧栏默认折叠。
+  3. **其他**：日志面板（fa-bug）— 启用调试日志面板，右侧显示"已启用/已关闭"。未启用时点击启用；已启用时点击直接打开日志弹窗。启用后页面左侧出现🐛浮动图标（title"打开调试日志面板"），点击打开"调试日志"弹窗。使用说明（fa-book-open）— 打开内置帮助文档，含侧边导航（10 个章节：欢迎使用/基本操作/收藏面板/搜索与翻页/收藏项操作/预览模式/截图功能/主题与设置/更新插件/常见问题），移动端（≤768px）侧栏默认折叠。
 
 ## 调试日志面板
 - **入口**：设置菜单「启用日志面板」后，页面左侧出现🐛图标，点击打开"调试日志"弹窗。
 - **功能**：日志级别筛选下拉（ALL / ERROR / WARN / INFO / SUCCESS / DEBUG，默认 ALL）；清空按钮（fa-eraser，提示"日志已清空"）；下载按钮（fa-download，导出文件名格式"StarPlugin_DebugLog_时间戳.txt"，提示"日志文件已开始下载"）。
 - 日志内存上限 500 条（超出自动覆盖最旧的）；每条格式为"[HH:MM:SS] [级别] 消息"。
 - 空态文案："暂无日志记录"（完全无日志）/ "暂无匹配的日志记录"（被筛选过滤）。
-- 关闭方式：X 按钮、点击遮罩、Escape 键。
+- **最小化与关闭**：弹窗右上角点击 <strong>- 最小化</strong> 收起弹窗至左侧悬浮球（Bug 图标保留，可随时再点开）；点击 <strong>X 关闭</strong> 则彻底关闭日志面板（隐藏 Bug 图标、恢复默认日志级别），关闭能力仅在弹窗内，设置菜单不再提供"关闭"入口。
+- 关闭方式：X 按钮（彻底关闭）、- 最小化按钮（收起）、点击遮罩、Escape 键。
 
 ## AI 答疑面板（Star 小助手）
 - **入口**：收藏面板左侧边栏底部的 AI 答疑按钮（气泡图标，位于太阳/月亮主题切换图标右侧、设置齿轮图标左侧）。
@@ -122,12 +125,13 @@ ${getUsageGuidePlainText()}
 - **内心独白**：如果模型返回思维链内容（reasoning_content），会默认折叠在"💭 内心独白"区域（点击展开），不会影响正文显示，也不会写入后续对话上下文。
 - **配置入口**：答疑面板内右上角齿轮图标（fa-gear）。
 - **配置项（修改后自动保存，无手动保存按钮）**：API 地址（OpenAI 兼容格式，支持 /chat/completions 完整路径或 base URL）、API 密钥（密码输入框）、模型名称（如 gpt-3.5-turbo、gpt-4o、deepseek-chat、qwen-turbo）。回复固定使用流式传输（打字机效果），无需配置。
-- 兼容任何 OpenAI Chat Completions 格式的 API（OpenAI、硅基流动、DeepSeek、Ollama 等）；密钥仅存储在本地浏览器，不会上传到第三方服务器。
+- **自动获取模型**：填入 API 地址与密钥后，插件会自动请求该 API 的 /models 接口获取可用模型列表；点击"模型名称"输入框会向上弹出模型列表，点击某一项即可自动填入。若获取失败（接口不兼容、网络异常等）则静默不显示列表，不弹报错。
+- 兼容任何 OpenAI Chat Completions 格式的 API（OpenAI、硅基流动、DeepSeek、Ollama 等）。**密钥存储说明**：API 地址/密钥/模型保存在 SillyTavern 服务器端的 settings.json（extension_settings，键名 star，明文存储），只会用于请求用户自己配置的 API，不会发送给插件作者或任何第三方服务器。
 - 对话历史仅保存在内存中，刷新页面后清空；点击右上角扫帚图标可清空对话（超过 1 条消息时弹确认框）。
 - 未配置 API 时发送消息，会提示先配置 API 接口（告知设置入口和需要填写的三项内容）。
 
 ## 数据存储与备份
-- **收藏数据**实际存储在聊天文件（.jsonl）每条消息的 swipe_info 结构中（message.swipe_info[swipeId].star_favorite），随聊天记录一起保存在服务端 chats 目录，随聊天一起备份/迁移。**删除聊天文件 = 丢失该聊天所有收藏**。
+- **收藏数据**实际存储在聊天文件（.jsonl）每条消息的 swipe_info 结构中（message.swipe_info[swipeId].star_favorite，字段含 id、note 备注、create_date 创建时间），随聊天记录一起保存在服务端 chats 目录，随聊天一起备份/迁移。**删除聊天文件 = 丢失该聊天所有收藏**。
 - UI 读取时通过 core.js 的 buildVirtualFavorites() 把 swipe_info 汇总为"虚拟 favorites 数组"挂在 chatMetadata.favorites 上供界面使用——它只是运行时虚拟数据，**不会写入文件**。
 - 收藏数会以 favorites_count 字段形式保存，供角色/聊天列表接口快速筛选，不会把虚拟收藏数组写入文件造成臃肿；另会注入 favorites_updated_at 时间戳，作为收藏索引缓存的增量刷新信号（时间戳变化 = 收藏可能变化）。
 - **插件设置**（主题、每页数量、上下文范围、日志面板开关、QA 配置等）存储在 SillyTavern 的 extension_settings 中（键名 star）。
@@ -143,8 +147,8 @@ ${getUsageGuidePlainText()}
 
 ## 快捷键与键盘交互
 - **Alt + S**：收藏/取消收藏当前聊天最后一条消息（输入框内与预览模式下不触发）。
-- **Alt + F**：快速打开/关闭收藏面板。
-- **Escape 键逐层关闭**（子弹窗优先，最后才关主面板）：确认/输入/标签/编辑器/AI答疑/调试/截图选择/使用指南等自带 Esc 的子弹窗 → 标签筛选菜单 → 设置小菜单 → 截图设置 → 上下文查看器 → 收藏面板主窗口。
+- **Alt + F**：快速打开/关闭收藏面板（预览模式下不触发，避免干扰临时上下文）。
+- **Escape 键逐层关闭**（子弹窗优先，最后才关主面板）：确认/输入/编辑器/AI答疑/调试/截图选择/使用指南等自带 Esc 的子弹窗 → 设置小菜单 → 截图设置 → 上下文查看器 → 收藏面板主窗口。
 - 聊天界面的收藏星标：按住约 0.6 秒为长按（编辑备注），快速点击为收藏/取消收藏。
 - 角色切换器打开时按 Escape 只关闭切换器，不会连带关闭收藏面板。
 
@@ -1019,10 +1023,13 @@ export function showQASettingsPopup() {
             </div>
             <div class="star-qa-settings-field">
                 <label for="star-qa-model">模型名称</label>
-                <input type="text" id="star-qa-model" class="star-qa-settings-input"
-                    placeholder="gpt-3.5-turbo"
-                    value="${escapeHtml(currentModel)}">
-                <span class="star-qa-settings-hint">如 gpt-3.5-turbo、gpt-4o、deepseek-chat、qwen-turbo 等</span>
+                <div class="star-qa-model-wrap">
+                    <input type="text" id="star-qa-model" class="star-qa-settings-input"
+                        placeholder="gpt-3.5-turbo" autocomplete="off"
+                        value="${escapeHtml(currentModel)}">
+                    <div class="star-qa-model-dropdown" id="star-qa-model-dropdown"></div>
+                </div>
+                <span class="star-qa-settings-hint">如 gpt-3.5-turbo、gpt-4o、deepseek-chat、qwen-turbo 等。填入 API 地址与密钥后，点击输入框可自动选择可用模型</span>
             </div>
             <div class="star-qa-settings-saved" id="star-qa-settings-saved-tip">✅ 设置已自动保存</div>
         </div>
@@ -1069,6 +1076,8 @@ export function showQASettingsPopup() {
     const endpointEl = dialog.querySelector('#star-qa-endpoint');
     const keyEl = dialog.querySelector('#star-qa-key');
     const modelEl = dialog.querySelector('#star-qa-model');
+    const modelWrap = dialog.querySelector('.star-qa-model-wrap');
+    const modelDropdown = dialog.querySelector('#star-qa-model-dropdown');
 
     // 防抖保存：文本输入 500ms 无操作后保存
     let saveTimer = null;
@@ -1087,6 +1096,114 @@ export function showQASettingsPopup() {
     endpointEl.addEventListener('input', scheduleSave);
     keyEl.addEventListener('input', scheduleSave);
     modelEl.addEventListener('input', scheduleSave);
+
+    // ==========================================
+    // 自动获取模型列表（填入 API 地址与密钥后自动获取，点击输入框弹出选择）
+    // ==========================================
+    let qaModelsCache = [];        // 当前已成功获取的模型列表
+    let autoFetchTimer = null;     // 自动获取防抖
+    let hideDropdownTimer = null;  // 失焦隐藏防抖
+
+    // 从 API 地址推导 /models 请求地址（兼容完整 /chat/completions 路径与 base URL）
+    const buildModelsUrl = (endpoint) => {
+        let base = (endpoint || '').trim().replace(/\/+$/, '');
+        if (!base) return '';
+        if (base.endsWith('/chat/completions')) {
+            base = base.slice(0, -'/chat/completions'.length);
+        }
+        return base.replace(/\/+$/, '') + '/models';
+    };
+
+    // 获取模型列表；失败时静默清空缓存（不显示报错），弹窗已关闭则不再刷新
+    const fetchQAModels = async () => {
+        const ep = endpointEl.value.trim();
+        const key = keyEl.value.trim();
+        const url = buildModelsUrl(ep);
+        if (!ep || !key || !url) {
+            qaModelsCache = [];
+            return;
+        }
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            const resp = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${key}` },
+                signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            if (!resp.ok) {
+                qaModelsCache = [];
+                return;
+            }
+            const data = await resp.json();
+            const list = Array.isArray(data) ? data : (data.data || []);
+            qaModelsCache = list
+                .map(m => (typeof m === 'string' ? m : m?.id))
+                .filter(m => typeof m === 'string' && m.trim());
+        } catch {
+            qaModelsCache = [];
+        }
+        // 弹窗已关闭则忽略
+        if (!document.getElementById('star-qa-settings-overlay')) return;
+        // 若模型输入框仍聚焦，立即刷新显示下拉列表
+        if (document.activeElement === modelEl) {
+            refreshModelDropdown();
+        }
+    };
+
+    // 渲染下拉列表并定位（默认向上延伸，上方空间不足时向下）
+    const refreshModelDropdown = () => {
+        modelDropdown.innerHTML = qaModelsCache
+            .map(m => `<div class="star-qa-model-dropdown-item" data-model="${escapeHtml(m)}">${escapeHtml(m)}</div>`)
+            .join('');
+        modelDropdown.classList.add('show');
+        const dialogRect = dialog.getBoundingClientRect();
+        const wrapRect = modelWrap.getBoundingClientRect();
+        const ddRect = modelDropdown.getBoundingClientRect();
+        if (wrapRect.top - dialogRect.top >= ddRect.height) {
+            modelDropdown.style.top = 'auto';
+            modelDropdown.style.bottom = 'calc(100% + 6px)';
+        } else {
+            modelDropdown.style.bottom = 'auto';
+            modelDropdown.style.top = 'calc(100% + 6px)';
+        }
+    };
+
+    const hideModelDropdown = () => {
+        modelDropdown.classList.remove('show');
+    };
+
+    // 自动获取：endpoint/key 输入变化时防抖获取；打开弹窗时若已有配置也获取一次
+    const scheduleAutoFetch = () => {
+        clearTimeout(autoFetchTimer);
+        autoFetchTimer = setTimeout(fetchQAModels, 600);
+    };
+    endpointEl.addEventListener('input', scheduleAutoFetch);
+    keyEl.addEventListener('input', scheduleAutoFetch);
+    scheduleAutoFetch();
+
+    // 模型输入框：聚焦时若有已获取的模型列表则向上弹出；失焦后隐藏（延迟以便点击列表项）
+    modelEl.addEventListener('focus', () => {
+        clearTimeout(hideDropdownTimer);
+        if (qaModelsCache.length > 0) {
+            refreshModelDropdown();
+        }
+    });
+    modelEl.addEventListener('blur', () => {
+        clearTimeout(hideDropdownTimer);
+        hideDropdownTimer = setTimeout(hideModelDropdown, 150);
+    });
+
+    // 点击列表项：填入模型并保存；mousedown 阻止输入框失焦
+    modelDropdown.addEventListener('mousedown', (e) => e.preventDefault());
+    modelDropdown.addEventListener('click', (e) => {
+        const item = e.target.closest('.star-qa-model-dropdown-item');
+        if (!item) return;
+        modelEl.value = item.dataset.model;
+        hideModelDropdown();
+        scheduleSave();
+        modelEl.focus();
+    });
 
     // 显示弹窗：直接设置 opacity 为 1（不使用 CSS transition，避免 !important 冲突）
     overlay.style.setProperty('opacity', '1', 'important');

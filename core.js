@@ -493,6 +493,19 @@ export async function handleEditTags(favId, targetChatFile = null) {
 }
 
 /**
+ * 判断消息是否“完全空白”（无法收藏）：正文为空，且无思维链、无任何 swipe 文本。
+ * ST 中 AI 生成中的消息 mes 可能为空，但 extra.reasoning（思维链）有内容且是界面最后一条，
+ * 这类消息不能被当作空占位跳过，否则 Alt+S 会收藏到“倒数第二条”。
+ */
+function isBlankMessage(m) {
+    if (!m) return true;
+    if (typeof m.mes === 'string' && m.mes.trim()) return false;
+    if (m.extra && m.extra.reasoning && String(m.extra.reasoning).trim()) return false;
+    if (Array.isArray(m.swipes) && m.swipes.some(s => typeof s === 'string' && s.trim())) return false;
+    return true;
+}
+
+/**
  * 全局快捷键（Alt+S）：收藏/取消收藏当前聊天最后一条消息。
  * 在预览模式下不应触发（预览的是临时加载的历史上下文，非当前聊天）。
  */
@@ -503,11 +516,11 @@ export function toggleFavoriteLastMessage() {
         return;
     }
 
-    // 取最后一条非空消息（跳过空占位）
+    // 从末尾向前找最后一条“有实际内容”的消息（跳过完全空白占位）
     let idx = -1, msg = null;
     for (let i = context.chat.length - 1; i >= 0; i--) {
         const m = context.chat[i];
-        if (m && typeof m.mes === 'string' && m.mes.trim()) {
+        if (!isBlankMessage(m)) {
             idx = i;
             msg = m;
             break;

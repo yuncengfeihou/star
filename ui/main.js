@@ -6,7 +6,7 @@ import { timestampToMoment } from '../../../../utils.js';
 import { state, PLUGIN_NAME } from '../state.js';
 import { getAllChatFavoritesForCurrentContext, getFullChatData, isAbortError } from '../api.js';
 import { ensureFavoritesArrayExists, ensureCurrentChatIsCached } from '../core.js';
-import { applySavedTheme, showAvatarLongPressMenu, closeAvatarLongPressMenu } from './settings.js';
+import { applySavedTheme, showAvatarLongPressMenu, closeAvatarLongPressMenu, toggleTheme } from './settings.js';
 import { openCharacterSwitcher, closeCharacterSwitcher, preloadCharacterFavorites, abortPreload } from './character-switcher.js';
 import { handleViewContext, closeContextFrame } from './preview.js';
 import { toggleDebugPanel } from './debug.js';
@@ -70,7 +70,6 @@ export function ensureModalStructure() {
                     <i class="fa-solid fa-magnifying-glass ${SEARCH_ICON_CLASS}"></i>
                 </div>
                 <div class="favorites-tag-btn" title="按标签筛选"><i class="fa-solid fa-tags"></i></div>
-                <div class="favorites-qa-btn" title="AI答疑助手"><i class="fa-solid fa-circle-question"></i></div>
                 <div class="${MODAL_CLOSE_X_CLASS}"><i class="fa-solid fa-xmark"></i></div>
             </div>
             <div id="favorites_update_notice"></div>
@@ -85,14 +84,6 @@ export function ensureModalStructure() {
 
     // --- Event Listeners ---
     state.modalElement.querySelector(`.${MODAL_CLOSE_X_CLASS}`).addEventListener('click', closeFavoritesModal);
-
-    // AI答疑按钮
-    const qaBtn = state.modalElement.querySelector('.favorites-qa-btn');
-    if (qaBtn) {
-        qaBtn.addEventListener('click', () => {
-            import('./qa.js').then(m => m.openQAPanel());
-        });
-    }
 
     // 右上角标签筛选按钮（点击展开标签下拉菜单）
     const tagBtn = state.modalElement.querySelector('.favorites-tag-btn');
@@ -334,58 +325,6 @@ function toggleTagFilterMenu() {
     setTimeout(() => document.addEventListener('mousedown', _tagMenuOutsideHandler), 0);
 }
 
-// =================================================================
-//                      面板键盘导航
-// =================================================================
-
-/**
- * 收藏面板内的键盘导航：↑/↓ 移动焦点，Home/End 跳转首尾，Enter 查看上下文。
- * 与 handleEscKey 分离注册（职责单一），在面板打开时挂载、关闭时移除。
- */
-function handleFavoritesNavKeydown(event) {
-    const key = event.key;
-    const isNavKey = key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End' || key === 'Enter';
-    if (!isNavKey) return;
-
-    // 忽略输入区（搜索框等）按键，避免与文本编辑冲突
-    const tag = (event.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || event.target.isContentEditable) return;
-
-    // 有更高层级的弹窗打开时不拦截（编辑器/上下文查看器/设置菜单/角色切换器/QA/调试/截图选择）
-    if (document.getElementById('star-editor-frame')
-        || document.getElementById('context-messages-frame')
-        || document.getElementById('star-options-menu-overlay')
-        || document.getElementById('star-character-switcher')
-        || document.getElementById('star-qa-modal')
-        || document.getElementById('star-debug-modal')
-        || document.getElementById('star-ss-settings-overlay')
-        || document.getElementById('star-screenshot-popup')) return;
-
-    const items = state.modalBodyElement ? [...state.modalBodyElement.querySelectorAll('.favorite-item')] : [];
-    if (items.length === 0) return;
-
-    if (key === 'Enter') {
-        // 仅在已有聚焦项时触发查看上下文，否则不拦截（让默认行为继续）
-        if (state.keyboardFocusIndex >= 0 && state.keyboardFocusIndex < items.length) {
-            event.preventDefault();
-            const item = items[state.keyboardFocusIndex];
-            handleViewContext(item.dataset.msgId, state.currentViewingChatFile, item.dataset.swipeId);
-        }
-        return;
-    }
-
-    event.preventDefault();
-    let idx = state.keyboardFocusIndex;
-    if (key === 'ArrowDown') idx = Math.min(items.length - 1, idx + 1);
-    else if (key === 'ArrowUp') idx = Math.max(0, idx - 1);
-    else if (key === 'Home') idx = 0;
-    else if (key === 'End') idx = items.length - 1;
-    state.keyboardFocusIndex = idx;
-    items.forEach((el, i) => el.classList.toggle('keyboard-focus', i === idx));
-    const target = items[idx];
-    if (target) target.scrollIntoView({ block: 'nearest' });
-}
-
 /**
  * Handles search functionality in the modal.
  * 搜索基于缓存的全量收藏数据跨页匹配，而非仅过滤当前页 DOM；
@@ -523,7 +462,6 @@ export async function openFavoritesModal() {
         state.allChatsFavoritesData = [];
         state.isLoadingOtherChats = false;
         state.activeTagFilter = null;
-        state.keyboardFocusIndex = -1;
         state.modalBodyElement.innerHTML = '<div class="spinner"></div>';
 
         // Reset UI elements
@@ -546,8 +484,9 @@ export async function openFavoritesModal() {
     state.modalDialogElement.classList.add('visible');
 
     window.addEventListener('resize', centerModal);
-    favDoc.addEventListener('keydown', handleEscKey);
-    favDoc.addEventListener('keydown', handleFavoritesNavKeydown);
+    // capture 阶段监听：子弹窗（如 AI 答疑，其 Esc 监听在插件初始化时注册，早于本监听）
+    // 会先于本处理器把自己关闭；若在冒泡阶段判断，会因弹窗已不可见而误关主面板。
+    favDoc.addEventListener('keydown', handleEscKey, true);
 
     // 后台静默预加载角色收藏数据，让「切换角色」秒开
     preloadCharacterFavorites().catch(() => {});
@@ -562,6 +501,11 @@ export function closeFavoritesModal() {
     // 若调试日志面板已启用，随主弹窗一并关闭整个日志面板（隐藏图标、关闭弹窗、恢复日志级别）
     if (state.debugPanel?.enabled) {
         toggleDebugPanel();
+    }
+
+    // 若 AI 答疑处于最小化状态（存在浮动恢复按钮），随主弹窗一并彻底关闭（中止流式、移除恢复按钮）
+    if (document.getElementById('star-qa-restore-btn')) {
+        import('./qa.js').then(m => m.closeQAPanel());
     }
 
     if (state.modalElement) {
@@ -589,8 +533,7 @@ export function closeFavoritesModal() {
 
     // Clean up event listeners
     window.removeEventListener('resize', centerModal);
-    favDoc.removeEventListener('keydown', handleEscKey);
-    favDoc.removeEventListener('keydown', handleFavoritesNavKeydown);
+    favDoc.removeEventListener('keydown', handleEscKey, true);
 }
 
 /**
@@ -601,18 +544,39 @@ export async function handleEscKey(event) {
         return; // 如果不是Escape键，直接退出
     }
 
-    // 角色切换器打开时，ESC 仅关闭切换器（由切换器自身的 capture 监听处理），不连带关闭收藏面板
-    if (document.getElementById('star-character-switcher')) {
+    // --- 优先级 0: 自带 Esc 处理器的子级弹窗 ---
+    // 这些弹窗打开时，Esc 由它们自身的处理器关闭（主面板不介入），
+    // 避免“主弹窗 + 子弹窗”同时打开时一次 Esc 关掉两层。
+    // 注意：QA 答疑 / 调试面板 / 编辑器初始化时即创建、DOM 常驻（display/visible 控制显隐），
+    // 必须额外判断可见性，否则“存在即打开”会让主面板的 Esc 永远失效。
+    const TEMP_MODALS = [
+        'star-confirm-modal',        // 确认弹窗（临时创建）
+        'star-input-modal',          // 输入弹窗（临时创建）
+        'star-text-modal',           // 文本弹窗（临时创建）
+        'star-tags-modal',           // 标签编辑弹窗（临时创建）
+        'star-screenshot-popup',     // 截图选择弹窗（临时创建）
+        'star-guide-dialog',         // 使用指南（临时创建）
+        'star-character-switcher',   // 角色切换器（临时创建，自身 capture 监听处理）
+    ];
+    const persistentCheck = [
+        ['star-qa-modal', el => el.style.display !== 'none'],
+        ['star-debug-modal', el => el.classList.contains('visible')],
+        ['star-editor-frame', el => el.classList.contains('visible')],
+    ];
+    const subModalOpen = TEMP_MODALS.some(id => document.getElementById(id))
+        || persistentCheck.some(([id, check]) => { const el = document.getElementById(id); return el && check(el); });
+    if (subModalOpen) {
         return;
     }
 
-    // --- 优先级 0.5: 关闭标签筛选下拉菜单 ---
+    // --- 优先级 1: 关闭标签筛选下拉菜单 ---
+    // 必须走 closeTagFilterMenu() 完整清理。
     if (document.getElementById('star-tag-filter-menu')) {
         closeTagFilterMenu();
-        return;
+        return; // 处理完毕，停止后续检查
     }
 
-    // --- 优先级 1: 关闭最顶层的"设置"小菜单 ---
+    // --- 优先级 2: 关闭最顶层的"设置"小菜单 ---
     // 必须走 closeAvatarLongPressMenu() 完整清理：恢复主遮罩 backdrop-filter、
     // 移除 resize 监听。直接 remove DOM 会残留样式与监听器。
     if (document.getElementById('star-options-menu-overlay')) {
@@ -620,23 +584,19 @@ export async function handleEscKey(event) {
         return; // 处理完毕，停止后续检查
     }
 
-    // --- 优先级 2: 关闭消息编辑器 ---
-    // 它的层级与上下文查看器相同，但我们先检查它。
-    const editorFrame = document.getElementById('star-editor-frame');
-    if (editorFrame && editorFrame.classList.contains('visible')) {
-        // 最健壮的关闭方式是触发它自己的关闭按钮的点击事件。
-        // 这样可以确保所有在 `closeModal` 函数中定义的清理逻辑（如动画、事件监听器移除）都能正确执行。
-        const closeBtn = editorFrame.querySelector('.star-editor-close-btn');
+    // --- 优先级 3: 关闭截图设置弹窗（无独立 Esc 处理器，触发其关闭按钮） ---
+    const ssOverlay = document.getElementById('star-ss-settings-overlay');
+    if (ssOverlay) {
+        const closeBtn = ssOverlay.querySelector('.star-ss-close-btn');
         if (closeBtn) {
             closeBtn.click();
         } else {
-            // 如果找不到按钮，提供一个备用方案，直接移除元素。
-            editorFrame.remove();
+            ssOverlay.remove();
         }
-        return; // 处理完毕，停止后续检查
+        return;
     }
 
-    // --- 优先级 3: 关闭上下文查看器 ---
+    // --- 优先级 4: 关闭上下文查看器 ---
     const contextFrame = document.getElementById('context-messages-frame');
     if (contextFrame && contextFrame.classList.contains('visible')) {
         // 这个弹窗有专门的关闭函数，直接调用即可。
@@ -644,7 +604,7 @@ export async function handleEscKey(event) {
         return; // 处理完毕，停止后续检查
     }
 
-    // --- 优先级 4: 关闭收藏夹主窗口 ---
+    // --- 优先级 5: 关闭收藏夹主窗口 ---
     // 如果以上所有弹窗都不存在，最后才关闭收藏夹主窗口。
     if (state.modalElement && state.modalElement.classList.contains('visible')) {
         closeFavoritesModal();
@@ -761,6 +721,10 @@ export function renderChatListPanel() {
     const context = getContext();
     const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
 
+    // 侧栏底部主题图标：暗色主题显示月亮，亮色主题显示太阳
+    const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
+    const themeIcon = savedTheme === 'dark' ? 'fa-moon' : 'fa-sun';
+
     const chatListItemsHtml = `
         <div class="favorites-chat-list-items">
             ${state.allChatsFavoritesData.map(chat => {
@@ -786,8 +750,16 @@ export function renderChatListPanel() {
                 <i class="fa-solid fa-users"></i>
                 <span>切换角色</span>
             </div>
-            <div class="favorites-sidebar-settings-btn" title="打开设置">
-                <i class="fa-solid fa-gear"></i>
+            <div class="favorites-sidebar-icon-row">
+                <div class="favorites-sidebar-theme-btn" title="切换主题">
+                    <i class="fa-solid ${themeIcon}"></i>
+                </div>
+                <div class="favorites-sidebar-qa-btn" title="AI答疑助手">
+                    <i class="fa-solid fa-comment-dots"></i>
+                </div>
+                <div class="favorites-sidebar-settings-btn" title="打开设置">
+                    <i class="fa-solid fa-gear"></i>
+                </div>
             </div>
         </div>
     `;
@@ -799,6 +771,25 @@ export function renderChatListPanel() {
         charSwitchBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             openCharacterSwitcher();
+        });
+    }
+
+    // 绑定侧栏底部主题切换按钮（太阳/月亮图标，随主题切换）
+    const themeBtn = panel.querySelector('.favorites-sidebar-theme-btn');
+    if (themeBtn) {
+        themeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleTheme();
+            renderChatListPanel(); // 重新渲染以切换太阳/月亮图标
+        });
+    }
+
+    // 绑定侧栏底部 AI 答疑按钮（打开答疑面板）
+    const qaBtn = panel.querySelector('.favorites-sidebar-qa-btn');
+    if (qaBtn) {
+        qaBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            import('./qa.js').then(m => m.openQAPanel());
         });
     }
 
@@ -853,9 +844,6 @@ export async function renderMainPanel(viewingChatData) {
             }
         }
     }
-
-    // 主面板重渲染后清除键盘导航焦点（列表已重建，旧高亮随 innerHTML 一并消失）
-    state.keyboardFocusIndex = -1;
 
     const mainPanelHtml = `
         <div class="favorites-list">

@@ -53,9 +53,9 @@ ${getUsageGuidePlainText()}
 - 备注输入框的占位文字是"输入备注内容..."；备注按 Swipe 独立存储，切换 Swipe 时备注跟随变化。
 
 ## 收藏管理面板
-- **打开方式**：点击 SillyTavern 顶部的魔法棒🪄 →「收藏」按钮（或直接从收藏卡片的 👁️ 预览按钮重新打开）。
-- **标题栏**：左上角是当前角色/群组头像（**单击**展开/收起左侧边栏，**长按约 0.6 秒或右键**弹出设置菜单）；中间显示当前角色/群聊名；右侧依次是搜索框、AI 答疑按钮（？圆形图标，title"AI答疑助手"）、关闭按钮（X）。
-- **左侧边栏**：列出所有有收藏的聊天（当前聊天即使没有收藏也会显示），每项显示聊天文件名+收藏数量徽标，选中的高亮；侧栏底部有「切换角色」按钮（fa-users 图标）和齿轮设置按钮（fa-gear，title"打开设置"）。
+- **打开方式**：点击 SillyTavern 聊天输入框左边的魔法棒🪄 →「收藏」按钮（或直接从收藏卡片的 👁️ 预览按钮重新打开）。
+- **标题栏**：左上角是当前角色/群组头像（**单击**展开/收起左侧边栏，**长按约 0.6 秒或右键**弹出设置菜单）；中间显示当前角色/群聊名；右侧依次是搜索框、关闭按钮（X）。
+- **左侧边栏**：列出所有有收藏的聊天（当前聊天即使没有收藏也会显示），每项显示聊天文件名+收藏数量徽标，选中的高亮；侧栏底部有「切换角色」按钮（fa-users 图标）、太阳/月亮主题切换按钮（title"切换主题"）、AI 答疑按钮（气泡图标，title"AI答疑助手"）和齿轮设置按钮（fa-gear，title"打开设置"）。
 - **主区域**：收藏卡片列表，按楼层号（消息索引）升序排列；底部有分页栏（收藏数超过每页数量时出现）。
 - **性能表现**：打开面板时当前聊天的收藏**立即**渲染显示，其他聊天的收藏在后台异步加载（侧栏显示"加载中..."占位）；切换聊天或角色时会自动取消未完成的加载，避免旧数据污染。
 
@@ -100,15 +100,14 @@ ${getUsageGuidePlainText()}
 - **提示文案**：加载库"正在加载截图库..."、处理中"正在截图..."、成功"截图已保存: 文件名 (xx KB)"、失败"截图库加载失败，请检查网络连接"。
 
 ## 主题切换
-- **入口**：长按收藏面板左上角头像约 0.6 秒，或右键头像，或点击侧栏底部齿轮 → 弹出"设置"菜单 →「切换主题」（fa-palette 图标）。
-- 支持亮色/暗色两档，选择后立即生效并保存，提示"已切换至暗色主题"/"已切换至白天主题"。
+- **入口**：点击收藏面板左侧边栏底部的**太阳/月亮图标**（位于「切换角色」按钮下方、AI 答疑气泡图标左侧）。
+- 支持亮色/暗色两档，点击后立即生效并保存，提示"已切换至暗色主题"/"已切换至白天主题"。亮色主题显示太阳图标，暗色主题显示月亮图标。
 
 ## 设置菜单（当前分组结构）
-- **弹出方式**：长按或右键收藏面板左上角头像，或点击侧栏底部齿轮（fa-gear）。菜单为**分组布局**，共 4 组，每项右侧显示当前状态值：
-  1. **外观**：切换主题（fa-palette）— 亮色/暗色切换，右侧显示当前主题（亮色/暗色）。
-  2. **显示**：上下文范围（fa-arrows-left-right-to-line）— 决定"查看上下文"弹窗显示前后各几条消息（默认 1，即共 3 条；设为 2 显示前后各 2 条共 5 条；设为 0 只显示收藏消息本身）。**只影响"查看上下文"弹窗，预览模式固定加载 5 条**。右侧显示"前后各 N 条"。输入必须是非负整数，非法输入提示"请输入一个有效的非负整数。"并阻止关闭弹窗。每页收藏数（fa-list-ol）— 每页显示的收藏卡片数量（默认 10 条，建议 5~30，过大会影响加载性能），保存后立即刷新并重置到第一页。右侧显示"N 条"。输入必须为正整数（>0），非法提示"请输入一个有效的正整数。"。
-  3. **功能**：截图设置（fa-image）— 打开"截图设置 — 缓存管理"弹窗：分「🔤 字体缓存」和「🖼️ 图片缓存」两个区块，显示缓存数量和占用大小；字体集可点击展开查看内部文件，**长按 600ms 删除**单条/单集；单击图片行可预览；右上角可一键清空全部字体或图片缓存。清空后下次截图会自动重新下载资源。AI答疑设置（fa-robot）— 配置 Star 小助手的 API 接口（见下文）。这两项右侧有 › 箭头。
-  4. **其他**：日志面板（fa-bug）— 切换调试日志面板，右侧显示"已启用/已关闭"。启用后页面左侧出现🐛浮动图标（title"打开调试日志面板"），点击打开"调试日志"弹窗。使用说明（fa-book-open）— 打开内置帮助文档，含侧边导航（10 个章节：欢迎使用/基本操作/收藏面板/搜索与翻页/收藏项操作/预览模式/截图功能/主题与设置/更新插件/常见问题），移动端（≤768px）侧栏默认折叠。
+- **弹出方式**：长按或右键收藏面板左上角头像，或点击侧栏底部齿轮（fa-gear）。菜单为**分组布局**，共 3 组，每项右侧显示当前状态值：
+  1. **显示**：上下文范围（fa-arrows-left-right-to-line）— 决定"查看上下文"弹窗显示前后各几条消息（默认 1，即共 3 条；设为 2 显示前后各 2 条共 5 条；设为 0 只显示收藏消息本身）。**只影响"查看上下文"弹窗，预览模式固定加载 5 条**。右侧显示"前后各 N 条"。输入必须是非负整数，非法输入提示"请输入一个有效的非负整数。"并阻止关闭弹窗。每页收藏数（fa-list-ol）— 每页显示的收藏卡片数量（默认 10 条，建议 5~30，过大会影响加载性能），保存后立即刷新并重置到第一页。右侧显示"N 条"。输入必须为正整数（>0），非法提示"请输入一个有效的正整数。"。
+  2. **功能**：截图设置（fa-image）— 打开"截图设置 — 缓存管理"弹窗：分「🔤 字体缓存」和「🖼️ 图片缓存」两个区块，显示缓存数量和占用大小；字体集可点击展开查看内部文件，**长按 600ms 删除**单条/单集；单击图片行可预览；右上角可一键清空全部字体或图片缓存。清空后下次截图会自动重新下载资源。快捷键（fa-keyboard）— Alt+S 收藏/取消收藏、Alt+F 开关面板，右侧显示"Alt+S / Alt+F"。
+  3. **其他**：日志面板（fa-bug）— 切换调试日志面板，右侧显示"已启用/已关闭"。启用后页面左侧出现🐛浮动图标（title"打开调试日志面板"），点击打开"调试日志"弹窗。使用说明（fa-book-open）— 打开内置帮助文档，含侧边导航（10 个章节：欢迎使用/基本操作/收藏面板/搜索与翻页/收藏项操作/预览模式/截图功能/主题与设置/更新插件/常见问题），移动端（≤768px）侧栏默认折叠。
 
 ## 调试日志面板
 - **入口**：设置菜单「启用日志面板」后，页面左侧出现🐛图标，点击打开"调试日志"弹窗。
@@ -118,11 +117,10 @@ ${getUsageGuidePlainText()}
 - 关闭方式：X 按钮、点击遮罩、Escape 键。
 
 ## AI 答疑面板（Star 小助手）
-- **入口1**：收藏面板右上角的「?」圆形按钮（fa-circle-question）。
-- **入口**：收藏面板右上角的「?」圆形按钮（fa-circle-question）。
+- **入口**：收藏面板左侧边栏底部的 AI 答疑按钮（气泡图标，位于太阳/月亮主题切换图标右侧、设置齿轮图标左侧）。
 - **发送方式**：Enter 发送，Shift+Enter 换行；支持流式输出（打字机效果）、Markdown 渲染（标题/粗体/斜体/代码/列表/引用/链接/表格）、停止生成按钮（红色停止图标）、清空对话按钮（扫帚图标，标题"清空对话"）。
-- **思维链**：如果模型返回思维链内容（reasoning_content），会默认折叠在"💭 思维链"区域（点击展开），不会影响正文显示，也不会写入后续对话上下文。
-- **配置入口**：长按收藏面板左上角头像 →「AI答疑设置」，或答疑面板内右上角齿轮图标（fa-gear）。
+- **内心独白**：如果模型返回思维链内容（reasoning_content），会默认折叠在"💭 内心独白"区域（点击展开），不会影响正文显示，也不会写入后续对话上下文。
+- **配置入口**：答疑面板内右上角齿轮图标（fa-gear）。
 - **配置项（修改后自动保存，无手动保存按钮）**：API 地址（OpenAI 兼容格式，支持 /chat/completions 完整路径或 base URL）、API 密钥（密码输入框）、模型名称（如 gpt-3.5-turbo、gpt-4o、deepseek-chat、qwen-turbo）。回复固定使用流式传输（打字机效果），无需配置。
 - 兼容任何 OpenAI Chat Completions 格式的 API（OpenAI、硅基流动、DeepSeek、Ollama 等）；密钥仅存储在本地浏览器，不会上传到第三方服务器。
 - 对话历史仅保存在内存中，刷新页面后清空；点击右上角扫帚图标可清空对话（超过 1 条消息时弹确认框）。
@@ -144,7 +142,9 @@ ${getUsageGuidePlainText()}
 - 新版本插件**首次打开收藏面板**时，会自动弹出"Star 更新日志"弹窗（按钮"知道了"），关闭后记录已读，下次不再弹出。
 
 ## 快捷键与键盘交互
-- **Escape 键逐层关闭**（按优先级从高到低）：角色切换器 → 设置小菜单 → 消息编辑器 → 上下文查看器 → 收藏面板主窗口。
+- **Alt + S**：收藏/取消收藏当前聊天最后一条消息（输入框内与预览模式下不触发）。
+- **Alt + F**：快速打开/关闭收藏面板。
+- **Escape 键逐层关闭**（子弹窗优先，最后才关主面板）：确认/输入/标签/编辑器/AI答疑/调试/截图选择/使用指南等自带 Esc 的子弹窗 → 标签筛选菜单 → 设置小菜单 → 截图设置 → 上下文查看器 → 收藏面板主窗口。
 - 聊天界面的收藏星标：按住约 0.6 秒为长按（编辑备注），快速点击为收藏/取消收藏。
 - 角色切换器打开时按 Escape 只关闭切换器，不会连带关闭收藏面板。
 
@@ -234,6 +234,7 @@ export function ensureQAStructure() {
             <h3 class="${QA_TITLE_CLASS}" style="flex:1;margin:0;font-size:16px;font-weight:600;color:var(--star-text-main);">🤖 Star 小助手</h3>
             <div class="star-qa-clear-btn" title="清空对话" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:14px;color:var(--star-text-muted);"><i class="fa-solid fa-broom"></i></div>
             <div class="star-qa-settings-btn" title="AI答疑设置" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:14px;color:var(--star-text-muted);"><i class="fa-solid fa-gear"></i></div>
+            <div class="star-qa-min-btn" title="最小化" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:14px;color:var(--star-text-muted);"><i class="fa-solid fa-minus"></i></div>
             <div class="${QA_CLOSE_CLASS}" title="关闭" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:16px;color:var(--star-text-muted);"><i class="fa-solid fa-xmark"></i></div>
         `;
 
@@ -251,7 +252,6 @@ export function ensureQAStructure() {
         fcss('display', 'flex'); fcss('align-items', 'flex-end');
         fcss('gap', '8px'); fcss('padding', '10px 14px');
         fcss('flex-shrink', '0');
-        fcss('border-top', '1px solid var(--star-border-main)');
         fcss('background-color', 'var(--star-bg-header)');
         footer.innerHTML = `
             <textarea class="${QA_INPUT_CLASS}" placeholder="输入你的问题，Enter 发送 / Shift+Enter 换行" rows="1" style="flex:1;resize:none;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;max-height:100px;min-height:40px;outline:none;font-family:inherit;"></textarea>
@@ -286,6 +286,10 @@ export function ensureQAStructure() {
         settingsBtn.addEventListener('click', () => {
             showQASettingsPopup();
         });
+
+        // 最小化按钮（隐藏弹窗并显示浮动恢复按钮，保留对话与流式状态）
+        const minBtn = header.querySelector('.star-qa-min-btn');
+        minBtn.addEventListener('click', minimizeQAPanel);
 
         // 清空对话按钮
         const clearBtn = header.querySelector('.star-qa-clear-btn');
@@ -337,6 +341,10 @@ export function ensureQAStructure() {
 export function openQAPanel() {
     ensureQAStructure();
 
+    // 若存在最小化后的浮动恢复按钮，一并移除
+    const restoreBtn = document.getElementById('star-qa-restore-btn');
+    if (restoreBtn) restoreBtn.remove();
+
     const modal = document.getElementById(QA_MODAL_ID);
     if (!modal) return;
 
@@ -365,6 +373,9 @@ export function closeQAPanel() {
         streamAbortController = null;
         isStreaming = false;
     }
+    // 若存在最小化后的浮动恢复按钮，一并移除
+    const restoreBtn = document.getElementById('star-qa-restore-btn');
+    if (restoreBtn) restoreBtn.remove();
     const modal = document.getElementById(QA_MODAL_ID);
     if (modal) {
         modal.style.setProperty('display', 'none', 'important');
@@ -372,6 +383,32 @@ export function closeQAPanel() {
         // 恢复 UI 状态
         setStreamingState(modal, false);
     }
+}
+
+/**
+ * 最小化答疑面板：隐藏弹窗但保留对话与流式状态（不中止流式、不清空对话），
+ * 并在屏幕右下角显示一个浮动恢复按钮，点击可重新展开面板继续提问。
+ */
+export function minimizeQAPanel() {
+    const modal = document.getElementById(QA_MODAL_ID);
+    if (!modal) return;
+    modal.style.setProperty('display', 'none', 'important');
+    modal.style.setProperty('opacity', '0', 'important');
+
+    // 创建浮动恢复按钮（避免重复创建）
+    if (document.getElementById('star-qa-restore-btn')) return;
+    const btn = document.createElement('div');
+    btn.id = 'star-qa-restore-btn';
+    btn.className = 'star-qa-restore-btn';
+    const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
+    if (savedTheme === 'dark') btn.dataset.starTheme = 'dark';
+    btn.title = '恢复 AI 答疑';
+    btn.innerHTML = '<i class="fa-solid fa-comment-dots"></i>';
+    btn.addEventListener('click', () => {
+        btn.remove();
+        openQAPanel();
+    });
+    document.body.appendChild(btn);
 }
 
 /**
@@ -472,7 +509,7 @@ async function handleQASend(inputEl) {
         typingEl.remove();
         appendQAMessage(body, 'assistant',
             '⚠️ 请先配置 API 接口！\n\n' +
-            '点击收藏面板左上角头像 **长按** → 选择 **「AI答疑设置」**，填入：\n' +
+            '点击答疑面板右上角 **齿轮图标** → 打开「AI答疑设置」，填入：\n' +
             '1. API 地址（OpenAI兼容格式，如 https://api.openai.com/v1/chat/completions）\n' +
             '2. API 密钥\n' +
             '3. 模型名称（可选，默认 gpt-3.5-turbo）'
@@ -650,8 +687,15 @@ async function callQAApiStream(endpoint, apiKey, model, messages, bubbleEl, body
                             fullContent += contentDelta;
                         }
                         if (contentDelta || reasoningDelta) {
-                            // 实时更新气泡内容（思维链折叠在顶部，正文在下）
+                            // 流式重建会重置 details 的 open 状态：记住用户是否已展开内心独白，重建后保持
+                            const reasoningEl = bubbleEl.querySelector('.star-qa-reasoning');
+                            const wasOpen = reasoningEl ? reasoningEl.hasAttribute('open') : false;
+                            // 实时更新气泡内容（内心独白折叠在顶部，正文在下）
                             bubbleEl.innerHTML = formatQAContent(fullContent, fullReasoning);
+                            if (wasOpen) {
+                                const el = bubbleEl.querySelector('.star-qa-reasoning');
+                                if (el) el.setAttribute('open', '');
+                            }
                             scrollQABody(body);
                         }
 
@@ -714,7 +758,7 @@ function formatQAContent(text, reasoning = '') {
         ? `<details class="star-qa-reasoning">
             <summary class="star-qa-reasoning-summary">
                 <span class="star-qa-reasoning-icon"><i class="fa-solid fa-brain"></i></span>
-                <span class="star-qa-reasoning-label">思维链</span>
+                <span class="star-qa-reasoning-label">内心独白</span>
                 <span class="star-qa-reasoning-hint">点击查看思考过程</span>
                 <i class="fa-solid fa-chevron-right star-qa-reasoning-arrow"></i>
             </summary>

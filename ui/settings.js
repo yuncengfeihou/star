@@ -147,7 +147,6 @@ export function showAvatarLongPressMenu() {
 
     // 读取当前设置值，用于菜单右侧的状态回显
     const starSettings = extension_settings[PLUGIN_NAME] || {};
-    const currentTheme = starSettings.theme === 'dark' ? '暗色' : '亮色';
     const currentContextRange = starSettings.contextViewRange ?? 1;
     const currentItemsPerPage = starSettings.itemsPerPage ?? 10;
     const debugEnabled = state.debugPanel.enabled;
@@ -158,12 +157,6 @@ export function showAvatarLongPressMenu() {
             <span>设置</span>
         </div>
         <div class="star-options-menu-body">
-            <div class="star-options-group-label">外观</div>
-            <div class="star-options-menu-item" data-action="toggle-theme">
-                <i class="fa-solid fa-palette star-options-item-icon"></i>
-                <span class="star-options-item-label">切换主题</span>
-                <span class="star-options-item-value">${currentTheme}</span>
-            </div>
             <div class="star-options-group-label">显示</div>
             <div class="star-options-menu-item" data-action="context-range-settings">
                 <i class="fa-solid fa-arrows-left-right-to-line star-options-item-icon"></i>
@@ -181,15 +174,10 @@ export function showAvatarLongPressMenu() {
                 <span class="star-options-item-label">截图设置</span>
                 <span class="star-options-item-value star-options-menu-arrow"><i class="fa-solid fa-chevron-right"></i></span>
             </div>
-            <div class="star-options-menu-item" data-action="qa-settings">
-                <i class="fa-solid fa-robot star-options-item-icon"></i>
-                <span class="star-options-item-label">AI答疑设置</span>
-                <span class="star-options-item-value star-options-menu-arrow"><i class="fa-solid fa-chevron-right"></i></span>
-            </div>
             <div class="star-options-menu-item" data-action="shortcut-info">
                 <i class="fa-solid fa-keyboard star-options-item-icon"></i>
                 <span class="star-options-item-label">快捷键</span>
-                <span class="star-options-item-value">Alt+S</span>
+                <span class="star-options-item-value">Alt+S / Alt+F</span>
             </div>
             <div class="star-options-group-label">其他</div>
             <div class="star-options-menu-item" data-action="toggle-debug-panel">
@@ -238,9 +226,7 @@ export function showAvatarLongPressMenu() {
 
         const action = item.dataset.action;
         closeAvatarLongPressMenu(); // 选择后总是关闭
-        if (action === 'toggle-theme') {
-            toggleTheme();
-        } else if (action === 'usage-guide') {
+        if (action === 'usage-guide') {
             setTimeout(showUsageGuidePopup, 100);
         } else if (action === 'context-range-settings') {
             setTimeout(showContextRangeSettingsPopup, 100);
@@ -250,8 +236,6 @@ export function showAvatarLongPressMenu() {
             setTimeout(toggleDebugPanel, 100);
         } else if (action === 'screenshot-settings') {
             setTimeout(showScreenshotSettingsPopup, 100);
-        } else if (action === 'qa-settings') {
-            setTimeout(() => import('./qa.js').then(m => m.showQASettingsPopup()), 100);
         } else if (action === 'shortcut-info') {
             setTimeout(showShortcutInfoPopup, 100);
         }
@@ -388,19 +372,14 @@ export async function showItemsPerPageSettingsPopup() {
 }
 
 /**
- * 显示快捷键说明弹窗（Alt+S 全局快捷键 + 收藏面板键盘导航）。
+ * 显示快捷键说明弹窗（Alt+S 收藏 / Alt+F 开面板 / Esc 逐层关闭）。
  */
 export function showShortcutInfoPopup() {
     const popupHtml = `
         <div class="star-settings-description">
             <p><b>Alt + S</b>：一键收藏 / 取消收藏当前聊天最后一条消息（输入框内不生效，预览模式下不触发）。</p>
-            <hr>
-            <p>收藏面板打开时：</p>
-            <ul>
-                <li><b>↑ / ↓</b> — 在收藏列表之间移动</li>
-                <li><b>Home / End</b> — 跳转到列表首 / 尾</li>
-                <li><b>Enter</b> — 查看当前选中收藏的上下文</li>
-            </ul>
+            <p><b>Alt + F</b>：快速打开 / 关闭收藏面板。</p>
+            <p><b>Esc</b>：逐层关闭弹窗——子弹窗（确认 / 输入 / 标签 / 编辑器 / AI 答疑 / 调试 / 截图选择 / 使用指南等）优先关闭，最后才关收藏面板主窗口。</p>
         </div>
     `;
     showTextModal(popupHtml, '快捷键说明', { title: '快捷键说明', okButton: '知道了', wide: false });
@@ -551,7 +530,7 @@ const sectionContents = {
                 <li><strong>长按</strong>左上角的头像（约 0.6 秒）。</li>
                 <li>点击左侧边栏底部的<strong>齿轮图标</strong> <i class="fa-solid fa-gear"></i>。</li>
             </ul>
-            <p>在设置菜单中，你可以切换主题、修改上下文范围、调整每页收藏数、打开截图设置、查看使用说明等。</p>
+            <p>在设置菜单中，你可以修改上下文范围、调整每页收藏数、打开截图设置、查看使用说明等。</p>
         `,
         search: `
             <h2>🔍 搜索与翻页</h2>
@@ -708,9 +687,8 @@ const sectionContents = {
             <h3>切换主题</h3>
             <p>收藏器支持<strong>亮色</strong>和<strong>暗色</strong>两种主题：</p>
             <ol>
-                <li>打开设置菜单（长按左上角头像或点击侧栏齿轮图标）。</li>
-                <li>选择<strong>“切换主题”</strong>。</li>
-                <li>主题设置会自动保存到浏览器中，下次打开时保持你的选择。</li>
+                <li>点击收藏面板左侧边栏底部的<strong>太阳/月亮图标</strong>（位于「切换角色」按钮下方、AI 答疑气泡图标左侧）。</li>
+                <li>主题会立即切换并自动保存，下次打开时保持你的选择。</li>
             </ol>
             <div class="star-guide-tip">
                 <strong>💡 提示：</strong>暗色主题在夜间使用时更护眼，且文本对比度经过专门优化。主题切换会同步应用到收藏面板和上下文查看窗口。

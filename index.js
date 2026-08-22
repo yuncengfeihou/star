@@ -19,6 +19,7 @@ import {
 import {
     setupPreviewModeUI,
     openFavoritesModal,
+    closeFavoritesModal,
     renderFavoritesView,
     exitPreviewMode,
     initDebugPanel,
@@ -26,6 +27,7 @@ import {
     ensureQAStructure,
 } from './ui/index.js';
 import { initFontSystem } from './ui/font-subset.js';
+import { initTooltip } from './ui/tooltip.js';
 
 // 初始化日志级别
 Logger.setLogLevel(LogLevel.RUNTIME);
@@ -37,6 +39,9 @@ jQuery(async () => {
 
         // 初始化设置
         initSettings();
+
+        // 初始化自定义 tooltip（美化原生 title 提示为圆角气泡）
+        initTooltip();
 
         // 设置初始状态
         $('#form_sheld').removeClass('star-preview-active');
@@ -146,12 +151,28 @@ jQuery(async () => {
             });
 
         // ==========================================
-        // 全局快捷键：Alt+S 收藏/取消收藏最后一条消息
+        // 全局快捷键：Alt+S 收藏/取消收藏最后一条消息；Alt+F 快速打开/关闭收藏面板
         // ==========================================
         $(document).on('keydown', async (e) => {
-            // 仅响应 Alt（不叠加 Ctrl/Meta），键为 S
+            // 仅响应 Alt（不叠加 Ctrl/Meta）
             if (!e.altKey || e.ctrlKey || e.metaKey) return;
-            if (e.key.toLowerCase() !== 's') return;
+            const key = e.key.toLowerCase();
+
+            // Alt+F：快速打开/关闭收藏面板（不检查输入框——打开面板不修改文本，随时可用）
+            if (key === 'f') {
+                e.preventDefault();
+                // 预览模式下不响应，避免干扰临时上下文
+                if (state.isPreviewingContext) return;
+                if (state.modalElement && state.modalElement.classList.contains('visible')) {
+                    closeFavoritesModal();
+                } else {
+                    await openFavoritesModal();
+                }
+                return;
+            }
+
+            // Alt+S：收藏/取消收藏最后一条消息
+            if (key !== 's') return;
             // 输入区（聊天输入框等）内不触发，避免打字时误触
             const tag = (e.target.tagName || '').toLowerCase();
             if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;

@@ -1,6 +1,6 @@
 // core.js - 核心业务逻辑模块（收藏增删改查）
 
-import { getContext, saveMetadataDebounced } from '../../../extensions.js';
+import { getContext } from '../../../extensions.js';
 import { uuidv4, timestampToMoment } from '../../../utils.js';
 import { reloadCurrentChat, getRequestHeaders, chat } from '../../../../script.js';
 import { state, PLUGIN_NAME } from './state.js';
@@ -46,21 +46,26 @@ export function buildVirtualFavorites(messages) {
 
 // ==================== 虚拟收藏数组缓存 ====================
 
-// 缓存键为 chat 数组引用 + 长度（消息增删必然改变长度；内容替换不影响收藏结构，无需失效）。
+// 缓存键为 chat 数组引用 + 长度 + chatMetadata 引用（消息增删必然改变长度；内容替换不影响收藏结构）。
+// 加入 chatMetadata 引用作为「聊天身份」校验：ST 每次加载聊天都会重新赋值 chat_metadata，
+// 即使 chat 数组被 ST 原地 splice 填充（引用与最终长度不变），身份变化也能让缓存失效，
+// 避免读操作命中内容已变但引用/长度未变的脏缓存（表现为面板显示错误条数）。
 // 收藏写操作（增/删/改备注）重建后主动写入缓存；读操作（ensureFavoritesArrayExists）
 // 命中时直接复用，避免对上千条消息的聊天在每次渲染/切换收藏时反复全量遍历。
 let _virtualFavoritesCacheChat = null;
 let _virtualFavoritesCacheLength = -1;
+let _virtualFavoritesCacheMeta = null;
 let _virtualFavoritesCacheResult = null;
 
-function buildVirtualFavoritesCached(messages) {
+function buildVirtualFavoritesCached(messages, chatMetadata = null) {
     const length = Array.isArray(messages) ? messages.length : 0;
-    if (_virtualFavoritesCacheResult && messages === _virtualFavoritesCacheChat && length === _virtualFavoritesCacheLength) {
+    if (_virtualFavoritesCacheResult && messages === _virtualFavoritesCacheChat && length === _virtualFavoritesCacheLength && chatMetadata === _virtualFavoritesCacheMeta) {
         return _virtualFavoritesCacheResult;
     }
     const result = buildVirtualFavorites(messages);
     _virtualFavoritesCacheChat = messages;
     _virtualFavoritesCacheLength = length;
+    _virtualFavoritesCacheMeta = chatMetadata ?? null;
     _virtualFavoritesCacheResult = result;
     return result;
 }
@@ -70,10 +75,11 @@ function buildVirtualFavoritesCached(messages) {
  * 写操作只改变 swipe_info 的收藏结构、不改变 chat 长度，而缓存键是「引用 + 长度」，
  * 若沿用 buildVirtualFavoritesCached 会命中旧缓存，导致 UI 与实际数据不一致（如删除后仍显示、改标签后不刷新）。
  */
-function rebuildVirtualFavoritesCache(messagesArray) {
+function rebuildVirtualFavoritesCache(messagesArray, chatMetadata = null) {
     const result = buildVirtualFavorites(messagesArray);
     _virtualFavoritesCacheChat = messagesArray;
     _virtualFavoritesCacheLength = Array.isArray(messagesArray) ? messagesArray.length : 0;
+    _virtualFavoritesCacheMeta = chatMetadata ?? null;
     _virtualFavoritesCacheResult = result;
     return result;
 }
@@ -128,8 +134,10 @@ export function ensureCurrentChatIsCached() {
 
 /**
  * 确保当前上下文中包含虚拟的 favorites 数组，兼容旧的同步读取方式。
+ * @param {boolean} [forceRebuild] - 为 true 时强制重建缓存（不命中缓存）。
+ *   面板首次打开等关键展示点传入，即使此前存在脏缓存也能纠正。
  */
-export function ensureFavoritesArrayExists() {
+export function ensureFavoritesArrayExists(forceRebuild = false) {
     let context;
     try {
         context = getContext();
@@ -137,8 +145,71 @@ export function ensureFavoritesArrayExists() {
     } catch (e) {
         return null;
     }
-    context.chatMetadata.favorites = buildVirtualFavoritesCached(context.chat);
+    context.chatMetadata.favorites = forceRebuild
+        ? rebuildVirtualFavoritesCache(context.chat, context.chatMetadata)
+        : buildVirtualFavoritesCached(context.chat, context.chatMetadata);
     return context.chatMetadata;
+}
+
+// ==================== 当前聊天收藏保存（防抖 + 失败重试） ====================
+
+// ST 的 saveMetadataDebounced 会对整个 26MB 聊天全量写回且内部吞掉错误：
+// 大文件下与后台读取（收藏面板打开时的其他聊天加载/角色切换器扫描）并发时，
+// Windows 下 write-file-atomic 的 rename 会因文件被占用报 EPERM，保存静默失败、
+// 收藏刷新后丢失。改由插件自管防抖保存：走 saveSpecificChatMetadata
+// （剥离虚拟 favorites 避免 ST 持久化冗余、带失败重试 + 明确失败提示）。
+let _favoriteSaveTimer = null;
+let _favoriteSaveSeq = 0;
+
+function scheduleFavoriteSave() {
+    clearTimeout(_favoriteSaveTimer);
+    // 记录触发时的聊天标识：防抖到期后若已切换聊天则放弃本次保存（与 ST 原 saveMetadataDebounced
+    // 的角色切换保护一致），避免把旧聊天的改动写到新聊天文件上。
+    const context = getContext();
+    const chatFileNoExt = String(context.chatId || '').replace('.jsonl', '');
+    _favoriteSaveTimer = setTimeout(() => {
+        _favoriteSaveTimer = null;
+        const seq = ++_favoriteSaveSeq;
+        void saveCurrentChatFavorites(seq, chatFileNoExt);
+    }, 800);
+}
+
+async function saveCurrentChatFavorites(seq, expectedChatFileNoExt) {
+    // 防抖窗口内又触发了新保存 → 本次跳过（下一次会带上最新数据）
+    if (seq !== _favoriteSaveSeq) return;
+
+    const context = getContext();
+    const chatFileNoExt = String(context.chatId || '').replace('.jsonl', '');
+    // 防抖期间切换了聊天：放弃本次保存（旧聊天的改动无法安全写回，与 ST 原行为一致）
+    if (!chatFileNoExt || chatFileNoExt !== expectedChatFileNoExt) return;
+
+    const chatDataInCache = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileNoExt);
+    // 防抖期间可能已切换聊天，跳过陈旧的保存任务
+    if (seq !== _favoriteSaveSeq) return;
+
+    const metadataToSave = chatDataInCache?.metadata || context.chatMetadata;
+    // 保存当前聊天必须用 ST 的 context.chat 真实数组（cache.messages 可能是
+    // 上次保存后的深拷贝，若保存副本会丢失 ST 侧新增/修改的消息，且收藏写入
+    // 的是 context.chat（见 addFavorite 等），两者必须一致）。
+    const messagesArray = context.chat;
+    if (!metadataToSave || !Array.isArray(messagesArray)) return;
+
+    // 保存前中断后台预加载扫描：打开面板时的预加载会对所有角色（含当前聊天）
+    // 全量读取 26MB 文件，与本次全量写回并发时，Windows 下文件锁会导致
+    // write-file-atomic 的 rename 失败（EPERM），收藏保存失败、刷新后丢失。
+    try {
+        const { abortPreload } = await import('./ui/index.js');
+        abortPreload();
+    } catch (e) {
+        // 动态导入失败不阻断保存（预加载中断只是尽力而为）
+    }
+
+    try {
+        await saveSpecificChatMetadata(chatFileNoExt, metadataToSave, messagesArray);
+    } catch (error) {
+        // saveSpecificChatMetadata 内部已重试并 toastr 提示，这里兜底记录
+        Logger.error('保存当前聊天收藏失败:', error);
+    }
 }
 
 /**
@@ -151,7 +222,11 @@ export function addFavorite(messageInfo, targetChatFile = null) {
     const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : (state.currentViewingChatFile || currentContextChatIdNoExt);
 
     const chatDataInCache = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
-    const messagesArray = chatDataInCache ? chatDataInCache.messages : context.chat;
+    // 当前聊天必须写 ST 的 context.chat（cache.messages 可能是保存后的深拷贝副本，
+    // 写入副本会导致聊天区图标与实际数据脱节）；只有其他聊天才用缓存的消息数组。
+    const messagesArray = (chatFileToModify === currentContextChatIdNoExt)
+        ? context.chat
+        : (chatDataInCache ? chatDataInCache.messages : context.chat);
 
     if (!messagesArray) {
         Logger.warn('addFavorite: 消息数组为空');
@@ -194,9 +269,10 @@ export function addFavorite(messageInfo, targetChatFile = null) {
 
     if (chatFileToModify === currentContextChatIdNoExt) {
         context.chatMetadata.favorites = virtualFavs;
-        saveMetadataDebounced();
+        scheduleFavoriteSave();
     } else {
-        saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray);
+        // 保存其他聊天收藏（saveSpecificChatMetadata 内部已重试并提示，此处静默吞掉拒绝）
+        saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray).catch(() => {});
     }
 
     return newItem;
@@ -212,7 +288,11 @@ export function removeFavoriteById(favoriteId, targetChatFile = null) {
     const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : (state.currentViewingChatFile || currentContextChatIdNoExt);
 
     const chatDataInCache = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
-    const messagesArray = chatDataInCache ? chatDataInCache.messages : context.chat;
+    // 当前聊天必须写 ST 的 context.chat（cache.messages 可能是保存后的深拷贝副本，
+    // 写入副本会导致聊天区图标与实际数据脱节）；只有其他聊天才用缓存的消息数组。
+    const messagesArray = (chatFileToModify === currentContextChatIdNoExt)
+        ? context.chat
+        : (chatDataInCache ? chatDataInCache.messages : context.chat);
     if (!messagesArray) {
         Logger.warn('removeFavoriteById: 消息数组为空');
         return false;
@@ -246,9 +326,10 @@ export function removeFavoriteById(favoriteId, targetChatFile = null) {
 
         if (chatFileToModify === currentContextChatIdNoExt) {
             context.chatMetadata.favorites = virtualFavs;
-            saveMetadataDebounced();
+            scheduleFavoriteSave();
         } else {
-            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray);
+            // 保存其他聊天收藏（saveSpecificChatMetadata 内部已重试并提示，此处静默吞掉拒绝）
+            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray).catch(() => {});
         }
     } else {
         Logger.warn(`removeFavoriteById: 未找到 favId=${favoriteId}`);
@@ -265,7 +346,11 @@ export function updateFavoriteNote(favoriteId, note, targetChatFile = null) {
     const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : (state.currentViewingChatFile || currentContextChatIdNoExt);
 
     const chatDataInCache = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
-    const messagesArray = chatDataInCache ? chatDataInCache.messages : context.chat;
+    // 当前聊天必须写 ST 的 context.chat（cache.messages 可能是保存后的深拷贝副本，
+    // 写入副本会导致聊天区图标与实际数据脱节）；只有其他聊天才用缓存的消息数组。
+    const messagesArray = (chatFileToModify === currentContextChatIdNoExt)
+        ? context.chat
+        : (chatDataInCache ? chatDataInCache.messages : context.chat);
     if (!messagesArray) return;
 
     let updated = false;
@@ -294,9 +379,10 @@ export function updateFavoriteNote(favoriteId, note, targetChatFile = null) {
         }
         if (chatFileToModify === currentContextChatIdNoExt) {
             context.chatMetadata.favorites = virtualFavs;
-            saveMetadataDebounced();
+            scheduleFavoriteSave();
         } else {
-            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray);
+            // 保存其他聊天收藏（saveSpecificChatMetadata 内部已重试并提示，此处静默吞掉拒绝）
+            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray).catch(() => {});
         }
     }
 }
@@ -311,7 +397,11 @@ export function updateFavoriteTags(favoriteId, tags, targetChatFile = null) {
     const chatFileToModify = targetChatFile ? String(targetChatFile).replace('.jsonl', '') : (state.currentViewingChatFile || currentContextChatIdNoExt);
 
     const chatDataInCache = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileToModify);
-    const messagesArray = chatDataInCache ? chatDataInCache.messages : context.chat;
+    // 当前聊天必须写 ST 的 context.chat（cache.messages 可能是保存后的深拷贝副本，
+    // 写入副本会导致聊天区图标与实际数据脱节）；只有其他聊天才用缓存的消息数组。
+    const messagesArray = (chatFileToModify === currentContextChatIdNoExt)
+        ? context.chat
+        : (chatDataInCache ? chatDataInCache.messages : context.chat);
     if (!messagesArray) return;
 
     // 清洗：去空、去重、去首尾空格
@@ -343,9 +433,10 @@ export function updateFavoriteTags(favoriteId, tags, targetChatFile = null) {
         }
         if (chatFileToModify === currentContextChatIdNoExt) {
             context.chatMetadata.favorites = virtualFavs;
-            saveMetadataDebounced();
+            scheduleFavoriteSave();
         } else {
-            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray);
+            // 保存其他聊天收藏（saveSpecificChatMetadata 内部已重试并提示，此处静默吞掉拒绝）
+            saveSpecificChatMetadata(chatFileToModify, chatDataInCache.metadata, messagesArray).catch(() => {});
         }
     }
 }

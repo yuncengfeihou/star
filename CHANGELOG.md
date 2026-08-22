@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
     *   **效果**（实测）：单条 7453ms → 1017ms（首次含下载）/ 901ms（缓存）；多消息 3 条 ~22s → 2678ms。字体几乎无损（与原图像素差异仅 0.069%）。
 2.  **资源三级缓存**：新增 `worker.js`（Web Worker 并行下载）+ IndexedDB 持久缓存 + 内存缓存。字体文件、图片跨会话复用，二次截图近乎零网络。
 3.  **图片跨域处理**：新增 `customImageFetchFn`，聊天中的外链图片经三级缓存转 dataURL，跨域失败时优雅回退占位图。
+4.  **角色切换器大环境体验**：扫描缓存过期但存在旧数据时先渲染旧列表（秒开），动画结束后再后台刷新，避免 100 角色 × 10 聊天（约 25GB）全量扫描（实测约 150s）期间抽屉长时间空白。
 
 ### ✨ 新增与体验优化 (Features & UX)
 
@@ -27,6 +28,10 @@ All notable changes to this project will be documented in this file.
 3.  修复收藏面板卡片备注清空后，右上角时间戳跑到左上角的布局问题。
 4.  优化标签编辑弹窗布局（参考备注弹窗重做），输入框样式不再被 SillyTavern 全局样式覆盖。
 5.  更新检查缓存由 `localStorage` 迁移至 `extension_settings`（符合项目规范），预览模式发送者名补充 XSS 转义。
+6.  修复大文件聊天（>25MB）收藏保存与后台读取并发时静默丢数据的问题：Windows 下 ST 全量写回（write-file-atomic 的 rename）与读取并存会触发文件锁 EPERM。现改为插件自管防抖保存（`scheduleFavoriteSave`），走 `saveSpecificChatMetadata`（剥离虚拟收藏、3 次指数退避重试、失败明确 toastr 警告、保存前中断后台预加载扫描），当前聊天收藏一律写入 `context.chat` 真实数组（避免写入深拷贝副本导致界面与数据脱节）。
+7.  修复收藏面板偶现显示错误条数（脏缓存命中）的问题：虚拟收藏缓存键加入 `chatMetadata` 引用做聊天身份校验，面板首次打开强制重建缓存。
+8.  修复虚拟收藏数组被 ST 持久化进 `chat_metadata` 导致文件冗余膨胀的问题：当前聊天收藏保存统一走 `saveSpecificChatMetadata`（剥离虚拟 favorites，仅写 `favorites_count`/`favorites_updated_at`）。
+9.  修复断网/慢网时更新弹窗 fetch 挂起导致收藏面板打不开的问题：远程文件获取增加 8 秒超时，超时后回退内联内容。
 
 ## [2.2.0] - 2025-11-6
 

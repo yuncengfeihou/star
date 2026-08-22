@@ -670,7 +670,9 @@ export async function renderFavoritesView(selectedChatFileName = null) {
     if (state.allChatsFavoritesData.length === 0) {
         // This block now only runs on the very first, "instant" render.
         // It uses getContext() for speed, avoiding API calls.
-        const currentChatMetadata = ensureFavoritesArrayExists() || { favorites: [] };
+        // forceRebuild=true：面板首次打开是收藏数据的关键展示点，即使此前存在
+        // 脏缓存（内容已变但数组引用/长度未变的竞态）也强制重建，保证显示正确。
+        const currentChatMetadata = ensureFavoritesArrayExists(true) || { favorites: [] };
         const currentChatMessages = context.chat || [];
 
         const initialData = {

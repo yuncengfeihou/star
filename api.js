@@ -49,12 +49,20 @@ export function compareVersions(versionA, versionB) {
 }
 
 /**
- * 从 raw.githubusercontent.com 获取远程文件内容。
+ * 从远程获取文件内容（raw.githubusercontent.com）。
+ * 带超时保护：断网/慢网时不能无限挂起（更新弹窗/检查更新依赖此函数，
+ * 挂起会导致主流程（如首次打开收藏面板）卡死）。
  */
-async function getRemoteFileContent(url) {
-    const response = await fetch(url + `?t=${Date.now()}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.text();
+async function getRemoteFileContent(url, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url + `?t=${Date.now()}`, { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.text();
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /**
@@ -692,72 +700,93 @@ export async function getFullChatData(characterId, groupId, chatFileNameNoExt, i
 export async function saveSpecificChatMetadata(chatFileNameNoExt, metadataToSave, messagesArray = null) {
     Logger.debug(`saveSpecificChatMetadata: chat=${chatFileNameNoExt}`);
     const context = getContext();
-    try {
-        let chatContentToSave = [];
-        // 从缓存查找该聊天所属的角色/群组信息（支持跨角色保存：当前 context 可能并非该收藏所属角色）
-        const cachedChat = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === String(chatFileNameNoExt).replace('.jsonl', ''));
-        const isGroupChat = cachedChat ? !!cachedChat.isGroup : !!context.groupId;
-        const targetCharacterId = (cachedChat && cachedChat.characterId !== undefined && cachedChat.characterId !== null) ? cachedChat.characterId : context.characterId;
-        const targetGroupId = (cachedChat && cachedChat.groupId !== undefined && cachedChat.groupId !== null) ? cachedChat.groupId : context.groupId;
-        let characterName, avatarUrl;
-        if (messagesArray === null) {
-            const fullChatData = await getFullChatData(targetCharacterId, targetGroupId, chatFileNameNoExt, isGroupChat);
-            if (!fullChatData || !fullChatData.messages) {
-                toastr.error(`保存收藏夹变动时错误：无法加载聊天消息。`);
-                return;
-            }
-            messagesArray = fullChatData.messages;
-        }
-        // 剥离虚拟的 favorites 数组，防止其被真实写入 JSONL 导致文件臃肿
-        // 同时注入 favorites_count，供 /api/characters/chats 返回聊天元数据时直接筛选
-        // 注入 favorites_updated_at：作为收藏索引缓存的增量刷新信号（时间戳变化 = 该聊天收藏可能变化）
-        const metadataClone = JSON.parse(JSON.stringify(metadataToSave));
-        const favoritesCount = Array.isArray(metadataToSave.favorites) ? metadataToSave.favorites.length : 0;
-        delete metadataClone.favorites;
-        metadataClone.favorites_count = favoritesCount;
-        metadataClone.favorites_updated_at = Date.now();
 
-        const finalMetadataObjectForSave = {
-            user_name: context.userAlias || context.name1 || "User",
-            character_name: "Unknown",
-            create_date: metadataToSave.create_date || timestampToMoment(Date.now()).format('YYYY-MM-DD HH:mm:ss'),
-            chat_metadata: metadataClone
-        };
-        chatContentToSave.push(finalMetadataObjectForSave);
-        chatContentToSave.push(...messagesArray);
-        let requestBody = { chat: chatContentToSave, file_name: chatFileNameNoExt, force: true };
-        if (isGroupChat) {
-            if (targetGroupId === undefined || targetGroupId === null) { toastr.error("无法保存群组聊天收藏：群组ID未知。"); return; }
-            requestBody.is_group = true;
-            requestBody.id = targetGroupId;
-            const group = context.groups?.find(g => g.id === targetGroupId);
-            finalMetadataObjectForSave.character_name = group ? group.name : "Group Chat";
-        } else {
-            if (targetCharacterId === undefined || targetCharacterId === null || !context.characters || !context.characters[targetCharacterId]) { toastr.error("无法保存角色聊天收藏：角色信息未知。"); return; }
-            const charObj = context.characters[targetCharacterId];
-            characterName = charObj.name;
-            avatarUrl = charObj.avatar;
-            requestBody.ch_name = characterName;
-            requestBody.avatar_url = avatarUrl;
-            finalMetadataObjectForSave.character_name = characterName;
+    // 大文件（>25MB）聊天在 Windows 下全量写回时，若与后台读取（如收藏面板打开时的
+    // 其他聊天加载、角色切换器扫描）并发，write-file-atomic 的 rename 会因文件被占用
+    // 报 EPERM（瞬时文件锁）。重试可等锁释放后成功；最终失败则 rethrow 并明确提示，
+    // 避免收藏静默丢失（刷新页面后消失）。
+    const MAX_SAVE_RETRIES = 3;
+
+    // ---- 数据准备（只做一次，重试时复用同一份快照） ----
+    let chatContentToSave = [];
+    // 从缓存查找该聊天所属的角色/群组信息（支持跨角色保存：当前 context 可能并非该收藏所属角色）
+    const cachedChat = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === String(chatFileNameNoExt).replace('.jsonl', ''));
+    const isGroupChat = cachedChat ? !!cachedChat.isGroup : !!context.groupId;
+    const targetCharacterId = (cachedChat && cachedChat.characterId !== undefined && cachedChat.characterId !== null) ? cachedChat.characterId : context.characterId;
+    const targetGroupId = (cachedChat && cachedChat.groupId !== undefined && cachedChat.groupId !== null) ? cachedChat.groupId : context.groupId;
+    let characterName, avatarUrl;
+    if (messagesArray === null) {
+        const fullChatData = await getFullChatData(targetCharacterId, targetGroupId, chatFileNameNoExt, isGroupChat);
+        if (!fullChatData || !fullChatData.messages) {
+            toastr.error(`保存收藏夹变动时错误：无法加载聊天消息。`);
+            return;
         }
-        chatContentToSave[0] = finalMetadataObjectForSave;
-        const response = await fetch('/api/chats/save', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(requestBody), cache: 'no-cache' });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Server responded with ${response.status}: ${errorText}`);
+        messagesArray = fullChatData.messages;
+    }
+    // 剥离虚拟的 favorites 数组，防止其被真实写入 JSONL 导致文件臃肿
+    // 同时注入 favorites_count，供 /api/characters/chats 返回聊天元数据时直接筛选
+    // 注入 favorites_updated_at：作为收藏索引缓存的增量刷新信号（时间戳变化 = 该聊天收藏可能变化）
+    const metadataClone = JSON.parse(JSON.stringify(metadataToSave));
+    const favoritesCount = Array.isArray(metadataToSave.favorites) ? metadataToSave.favorites.length : 0;
+    delete metadataClone.favorites;
+    metadataClone.favorites_count = favoritesCount;
+    metadataClone.favorites_updated_at = Date.now();
+
+    const finalMetadataObjectForSave = {
+        user_name: context.userAlias || context.name1 || "User",
+        character_name: "Unknown",
+        create_date: metadataToSave.create_date || timestampToMoment(Date.now()).format('YYYY-MM-DD HH:mm:ss'),
+        chat_metadata: metadataClone
+    };
+    chatContentToSave.push(finalMetadataObjectForSave);
+    chatContentToSave.push(...messagesArray);
+    let requestBody = { chat: chatContentToSave, file_name: chatFileNameNoExt, force: true };
+    if (isGroupChat) {
+        if (targetGroupId === undefined || targetGroupId === null) { toastr.error("无法保存群组聊天收藏：群组ID未知。"); return; }
+        requestBody.is_group = true;
+        requestBody.id = targetGroupId;
+        const group = context.groups?.find(g => g.id === targetGroupId);
+        finalMetadataObjectForSave.character_name = group ? group.name : "Group Chat";
+    } else {
+        if (targetCharacterId === undefined || targetCharacterId === null || !context.characters || !context.characters[targetCharacterId]) { toastr.error("无法保存角色聊天收藏：角色信息未知。"); return; }
+        const charObj = context.characters[targetCharacterId];
+        characterName = charObj.name;
+        avatarUrl = charObj.avatar;
+        requestBody.ch_name = characterName;
+        requestBody.avatar_url = avatarUrl;
+        finalMetadataObjectForSave.character_name = characterName;
+    }
+    chatContentToSave[0] = finalMetadataObjectForSave;
+
+    // ---- 带重试的保存请求 ----
+    for (let attempt = 1; attempt <= MAX_SAVE_RETRIES; attempt++) {
+        try {
+            const response = await fetch('/api/chats/save', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(requestBody), cache: 'no-cache' });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Server responded with ${response.status}: ${errorText}`);
+            }
+            const chatDataInCache = state.allChatsFavoritesData.find(c => c.fileName === chatFileNameNoExt);
+            if (chatDataInCache) {
+                chatDataInCache.metadata = JSON.parse(JSON.stringify(metadataToSave));
+                chatDataInCache.favorites = metadataToSave.favorites || [];
+                chatDataInCache.messages = JSON.parse(JSON.stringify(messagesArray));
+            }
+            // 标记角色收藏缓存过期，下次打开切换器时自动刷新
+            state.charactersCacheStale = true;
+            return;
+        } catch (error) {
+            const lastAttempt = attempt === MAX_SAVE_RETRIES;
+            Logger.error(`Error in saveSpecificChatMetadata for ${chatFileNameNoExt}${lastAttempt ? '' : `（第 ${attempt} 次，准备重试）`}`, error);
+            if (lastAttempt) {
+                toastr.error(`保存聊天 "${chatFileNameNoExt}" 的收藏夹变动失败：${error.message || '未知错误'}。请检查服务器连接后重试，当前改动可能未保存。`);
+                // rethrow：让调用方（如编辑原文的回滚逻辑）感知失败，避免 UI 与文件不一致
+                throw error;
+            }
+            // 递增退避：2s、4s、8s……等待瞬时文件锁释放。
+            // （保存前已中断预加载扫描，服务端已开始的读取会在数秒内清理完毕，此间隔足够避开 EPERM 窗口）
+            await new Promise(resolve => setTimeout(resolve, attempt * 2000));
         }
-        const chatDataInCache = state.allChatsFavoritesData.find(c => c.fileName === chatFileNameNoExt);
-        if (chatDataInCache) {
-            chatDataInCache.metadata = JSON.parse(JSON.stringify(metadataToSave));
-            chatDataInCache.favorites = metadataToSave.favorites || [];
-            chatDataInCache.messages = JSON.parse(JSON.stringify(messagesArray));
-        }
-        // 标记角色收藏缓存过期，下次打开切换器时自动刷新
-        state.charactersCacheStale = true;
-    } catch (error) {
-        Logger.error(`Error in saveSpecificChatMetadata for ${chatFileNameNoExt}`, error);
-        toastr.error(`保存聊天 "${chatFileNameNoExt}" 的收藏夹变动时发生错误：${error.message || '未知错误'}`);
     }
 }
 

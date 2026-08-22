@@ -234,8 +234,19 @@ export function openCharacterSwitcher() {
         renderList(frame, '');
         const totalFavs = state.charactersWithFavorites.reduce((s, c) => s + c.totalFavorites, 0);
         updateStatus(frame, `共 <b>${state.charactersWithFavorites.length}</b> 个角色，<b>${totalFavs}</b> 条收藏`);
+    } else if (state.charactersWithFavorites.length > 0) {
+        // 缓存过期但有旧数据：先渲染旧数据（秒开），动画结束后后台刷新，不阻塞 UI。
+        // （大环境下全量扫描可达 150s，若等扫描完再展示会让用户面对长时间空白。）
+        renderList(frame, '');
+        updateStatus(frame, '显示缓存数据，正在后台刷新…');
+        const onTransitionEnd = () => {
+            sheet.removeEventListener('transitionend', onTransitionEnd);
+            startScan(frame);
+        };
+        sheet.addEventListener('transitionend', onTransitionEnd);
+        frame._onTransitionEnd = onTransitionEnd;
     } else {
-        // 缓存为空/过期：等动画结束后再扫描，避免动画期间 DOM 变更导致卡顿
+        // 无缓存：等动画结束后再扫描，避免动画期间 DOM 变更导致卡顿
         const onTransitionEnd = () => {
             sheet.removeEventListener('transitionend', onTransitionEnd);
             startScan(frame);
@@ -269,7 +280,8 @@ async function startScan(frame) {
     state.isScanningCharacters = true;
 
     const listEl = frame.querySelector('.star-cs-list');
-    listEl.innerHTML = '';
+    // 不清空列表：缓存过期但已有旧数据时，旧列表保留可见，扫描完成后整体替换。
+    // （切换器每次打开都会新建 frame，列表初始即为空，无残留风险。）
     updateStatus(frame, '正在准备扫描…');
 
     try {

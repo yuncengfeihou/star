@@ -6,25 +6,11 @@
 //   离开/滚动/缩放 → 取消等待并恢复 title（不影响无障碍等场景）
 // 事件委托挂载在 document 上，动态重建的 DOM（innerHTML 重渲染）无需重复绑定。
 
-// 插件 UI 范围白名单：只接管这些容器内的 title，避免污染 SillyTavern 宿主页面的原生提示
-const STAR_TOOLTIP_SCOPE = [
-    '#favorites_button',          // ST 魔法棒面板内的收藏入口按钮
-    '#favoritesModal',            // 主收藏面板（搜索、侧栏、收藏项操作按钮等）
-    '#context-messages-frame',    // 预览/上下文查看器
-    '#star-qa-modal',             // AI 答疑面板
-    '#star-debug-modal',          // 调试日志面板
-    '#star-ss-settings-overlay',  // 截图设置弹窗
-    '#star-character-switcher',   // 角色切换器
-    '#star-guide-dialog',         // 使用指南
-    '#star-screenshot-popup',     // 截图选择弹窗
-    '#star-confirm-modal',        // 通用确认弹窗
-    '#star-input-modal',          // 通用输入弹窗
-    '#star-text-modal',           // 通用文本弹窗
-    '#star-tags-modal',           // 标签编辑弹窗
-    '#star-editor-frame',         // 备注编辑器
-    '.favorite-toggle-icon',      // 消息区收藏图标（位于 #chat，单独列出）
-    '.star-tag-filter-menu',      // 标签筛选菜单（挂载于 body）
-].join(',');
+import { decodeHtmlEntities } from '../utils.js';
+import { STAR_UI_SCOPE } from './scope.js';
+
+// 插件 UI 范围白名单（与键盘激活共用，见 ui/scope.js）：只接管这些容器内的 title，
+// 避免污染 SillyTavern 宿主页面的原生提示。
 const TOOLTIP_OFFSET = 12;      // 气泡相对鼠标的偏移（px）
 const TOOLTIP_EDGE_MARGIN = 8;  // 气泡贴边最小余量（px）
 const TOOLTIP_DELAY = 1250;     // 悬浮延迟：鼠标停满该时长（ms）才显示气泡
@@ -58,7 +44,7 @@ function handleMouseOver(e) {
     // 若只匹配 [title]，鼠标在元素内部移动时会因找不到 title 而误判为“不在范围内”并隐藏气泡）
     const target = e.target.closest('[title]:not([title=""]), [data-star-tip-active]');
     // 不在插件范围内 → 保持隐藏（也不接管宿主原生 title）
-    if (!target || !target.closest(STAR_TOOLTIP_SCOPE)) {
+    if (!target || !target.closest(STAR_UI_SCOPE)) {
         hideTip();
         return;
     }
@@ -142,14 +128,4 @@ function positionTip() {
     if (top + h > window.innerHeight - TOOLTIP_EDGE_MARGIN) top = mouseY - h - TOOLTIP_OFFSET;
     tipEl.style.left = `${Math.max(TOOLTIP_EDGE_MARGIN, left)}px`;
     tipEl.style.top = `${Math.max(TOOLTIP_EDGE_MARGIN, top)}px`;
-}
-
-/**
- * 解码 HTML 实体（title 属性里可能含 &quot; 等，需还原为原始字符展示）。
- * 使用 textarea 解码：只解析文本，不执行脚本，安全。
- */
-function decodeHtmlEntities(str) {
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = str;
-    return textarea.value;
 }

@@ -1,0 +1,18 @@
+{
+  "name": "star-extension",
+  "private": true,
+  "description": "SillyTavern 扩展「聊天收藏器」的开发期工具链配置（扩展本身无需构建，浏览器直接加载 index.js）",
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check-syntax.mjs && node scripts/check-imports.mjs && node scripts/check-version.mjs",
+    "lint": "eslint .",
+    "test": "node --test tests/*.test.mjs",
+    "verify": "npm run check && npm run lint && npm test && npm run css:scope:check && npm run tokens:check",
+    "css:scope": "node scripts/scope-styles.mjs --write",
+    "css:scope:check": "node scripts/scope-styles.mjs --check",
+    "tokens:check": "node scripts/check-tokens.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.30.0"
+  }
+}

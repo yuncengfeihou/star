@@ -1,8 +1,6 @@
 // ui/debug.js - 调试日志面板模块
 
-import { state, PLUGIN_NAME } from '../state.js';
-import { extension_settings } from '../../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../../script.js';
+import { state, getSetting, setSetting } from '../state.js';
 import Logger from '../Logger.js';
 
 const DEBUG_ICON_ID = 'star-debug-icon';
@@ -119,8 +117,7 @@ export function toggleDebugPanel() {
     if (!state.debugPanel.enabled) {
         // 启用：显示 bug 图标，并将日志级别设为 FULL
         state.debugPanel.enabled = true;
-        extension_settings[PLUGIN_NAME].debugPanelEnabled = true;
-        saveSettingsDebounced();
+        setSetting('debugPanelEnabled', true);
         state.debugPanel.iconElement.style.display = 'flex';
         Logger.setLogLevel(3); // LogLevel.FULL = 3
         Logger.info('🔍 调试日志面板已启用');
@@ -155,9 +152,13 @@ export function openDebugModal() {
     state.debugPanel.modalElement.style.display = 'block';
     centerDebugModal();
 
-    // 入场动画（与截图弹窗一致：RAF 后添加 visible class）
+    // 入场动画（与截图弹窗一致：RAF 后添加 visible class）。
+    // 若在这之前弹窗已被关闭（display 不再是 block），不能再补 visible——
+    // 否则会留下「class=visible 但 display:none」的状态，让 Esc 层级判断误以为面板仍开着。
     requestAnimationFrame(() => {
-        state.debugPanel.modalElement.classList.add('visible');
+        if (state.debugPanel.modalElement?.style.display === 'block') {
+            state.debugPanel.modalElement.classList.add('visible');
+        }
     });
 
     window.addEventListener('resize', centerDebugModal);
@@ -180,8 +181,7 @@ export function shutdownDebugPanel() {
     closeDebugModal();
     if (state.debugPanel.enabled) {
         state.debugPanel.enabled = false;
-        extension_settings[PLUGIN_NAME].debugPanelEnabled = false;
-        saveSettingsDebounced();
+        setSetting('debugPanelEnabled', false);
         if (state.debugPanel.iconElement) {
             state.debugPanel.iconElement.style.display = 'none';
         }
@@ -325,7 +325,7 @@ function downloadLogs() {
 export function applyDebugTheme() {
     if (!state.debugPanel.modalContainer) return;
 
-    const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
+    const savedTheme = getSetting('theme');
     const isDark = savedTheme === 'dark';
 
     if (isDark) {
@@ -343,7 +343,7 @@ export function applyDebugTheme() {
  * 初始化调试面板：读取持久化状态，恢复之前的启用/禁用。
  */
 export function initDebugPanel() {
-    const wasEnabled = extension_settings[PLUGIN_NAME]?.debugPanelEnabled === true;
+    const wasEnabled = getSetting('debugPanelEnabled') === true;
 
     if (wasEnabled) {
         ensureDebugPanelStructure();

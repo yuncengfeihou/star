@@ -1,6 +1,7 @@
 // ui/screenshot.js - 截图功能模块
 
 import { state } from '../state.js';
+import { escapeHtml } from '../utils.js';
 import Logger from '../Logger.js';
 import {
     ensureFontSystemReady,
@@ -168,15 +169,6 @@ async function buildCaptureOptions(element, extra = {}) {
 // =================================================================
 
 /**
- * HTML 转义
- */
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
-}
-
-/**
  * 显示截图消息选择弹窗。
  * 读取 #chat 中所有带 mesid 的消息元素，展示为可选列表。
  * 仅允许连续勾选。
@@ -186,9 +178,13 @@ function escapeHtml(str) {
 export function showScreenshotPopup() {
     Logger.debug('打开截图选择弹窗...');
     return new Promise((resolve) => {
-        // 移除已有弹窗
+        // 移除已有弹窗：走它自己的关闭逻辑，否则上一份的 keydown 监听会残留、
+        // 且第一次调用返回的 Promise 永远不结算
         const existing = document.getElementById('star-screenshot-popup');
-        if (existing) existing.remove();
+        if (existing) {
+            if (typeof existing._starClose === 'function') existing._starClose();
+            existing.remove();
+        }
 
         // 读取当前预览中的所有消息
         const messageElements = document.querySelectorAll('#chat .mes[mesid]');
@@ -230,14 +226,17 @@ export function showScreenshotPopup() {
         let minSelected = null;
         let maxSelected = null;
 
-        // 恢复之前保存的选择状态（除非已退出预览模式）
+        // 恢复之前保存的选择状态（进入预览时已清空，因此这里只可能是「同一个预览窗口内」的复用）
         if (state.screenshotSelection) {
             const saved = state.screenshotSelection;
-            // 验证保存的消息 ID 在 availableMessages 中是连续的
+            // 保存的区间可能比本次预览实际加载的楼层宽（换过预览目标、或 ST 截断了消息），
+            // 必须用**实际可用的楼层**把区间收敛到交集，而不是原样沿用保存的 min/max：
+            // 沿用会让弹窗按旧区间报数（「已选 #6—#10，5 条」），而 #6 已不在 #chat 里，
+            // 截取时逐号生成的 id 有一半查不到 DOM，只在 Logger.warn 里被跳过。
             const savedIds = availableMessages.filter(m => m.id >= saved.min && m.id <= saved.max).map(m => m.id);
             if (savedIds.length > 0) {
-                minSelected = saved.min;
-                maxSelected = saved.max;
+                minSelected = savedIds[0];
+                maxSelected = savedIds[savedIds.length - 1];
             }
         }
 
@@ -285,6 +284,9 @@ export function showScreenshotPopup() {
         const captureBtn = overlay.querySelector('.star-screenshot-btn-capture');
         const checkboxes = overlay.querySelectorAll('.star-screenshot-checkbox');
 
+        // 供「重复打开」路径调用：完整清理并结算上一次的 Promise
+        overlay._starClose = () => closePopup(null);
+
 
         // 应用主题
         if (state.modalDialogElement && state.modalDialogElement.dataset.starTheme === 'dark') {
@@ -292,15 +294,22 @@ export function showScreenshotPopup() {
         }
 
         // ---------- UI 更新 ----------
+        // 实际会被截取的楼层：本次预览里真实存在、且落在 [min,max] 内的那些。
+        // 报数与「截取」都必须以它为准——按 min..max 逐号生成 id 会把不存在的楼层也算进去。
+        function selectedIds() {
+            if (minSelected === null || maxSelected === null) return [];
+            return availableMessages.filter(m => m.id >= minSelected && m.id <= maxSelected).map(m => m.id);
+        }
+
         function refreshCheckboxes() {
             checkboxes.forEach(cb => {
                 const id = parseInt(cb.value, 10);
                 cb.checked = minSelected !== null && id >= minSelected && id <= maxSelected;
             });
 
-            if (minSelected !== null && maxSelected !== null) {
-                const count = maxSelected - minSelected + 1;
-                rangeEl.textContent = `已选范围: #${minSelected} — #${maxSelected}（${count} 条）`;
+            const ids = selectedIds();
+            if (ids.length > 0) {
+                rangeEl.textContent = `已选范围: #${ids[0]} — #${ids[ids.length - 1]}（${ids.length} 条）`;
                 captureBtn.disabled = false;
             } else {
                 rangeEl.textContent = '未选择';
@@ -309,7 +318,7 @@ export function showScreenshotPopup() {
         }
 
         // ---------- 连续勾选逻辑 ----------
-        function handleCheckboxChange(clickedId, targetCheckbox) {
+        function handleCheckboxChange(clickedId) {
             if (minSelected === null) {
                 // 首次选择
                 minSelected = clickedId;
@@ -355,7 +364,7 @@ export function showScreenshotPopup() {
         checkboxes.forEach(cb => {
             cb.addEventListener('change', function () {
                 const id = parseInt(this.value, 10);
-                handleCheckboxChange(id, this);
+                handleCheckboxChange(id);
             });
         });
 
@@ -370,15 +379,17 @@ export function showScreenshotPopup() {
         // 取消按钮
         overlay.querySelector('.star-screenshot-btn-cancel').addEventListener('click', () => closePopup(null));
 
-        // 截取按钮
+        // 截取按钮：只发送实际存在的楼层 id
         captureBtn.addEventListener('click', () => {
-            if (minSelected !== null && maxSelected !== null) {
-                const ids = [];
-                for (let i = minSelected; i <= maxSelected; i++) {
-                    ids.push(i);
-                }
-                closePopup(ids);
+            const ids = selectedIds();
+            if (ids.length === 0) return;
+            const declared = maxSelected - minSelected + 1;
+            if (ids.length < declared) {
+                // 理论上不会走到这里（选择在恢复时已收敛、勾选也只在可用楼层间扩展），
+                // 真出现说明有别的路径塞进了越界区间——提示一次，不要让用户以为少截是正常的
+                toastr.warning(`所选范围内只有 ${ids.length} 条消息可截取（已跳过 ${declared - ids.length} 条不在预览中）`);
             }
+            closePopup(ids);
         });
 
         // Escape 键关闭
@@ -390,13 +401,18 @@ export function showScreenshotPopup() {
         document.addEventListener('keydown', handleEsc);
 
         function closePopup(result) {
-            // 保存选择状态（仅在预览模式下保存）
-            if (state.isPreviewingContext && minSelected !== null && maxSelected !== null) {
-                state.screenshotSelection = { min: minSelected, max: maxSelected };
-            } else if (!state.isPreviewingContext) {
+            // 保存选择状态（仅在预览模式下保存）。存收敛后的区间，
+            // 否则下次恢复又会把已不在预览里的楼层带回来。
+            if (state.isPreviewingContext) {
+                const ids = selectedIds();
+                if (ids.length > 0) {
+                    state.screenshotSelection = { min: ids[0], max: ids[ids.length - 1] };
+                }
+            } else {
                 state.screenshotSelection = null;
             }
             document.removeEventListener('keydown', handleEsc);
+            overlay._starClose = null;
             // 立即移除弹窗 overlay，确保 backdrop-filter 不会影响后续截图渲染
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             // 使用 requestAnimationFrame 确保浏览器完成合成后再 resolve
@@ -457,12 +473,16 @@ export async function captureScreenshotMessages(messageIds) {
     const sortedIds = [...messageIds].sort((a, b) => a - b);
 
     try {
-        // 找到所有选中的消息 DOM 元素
+        // 找到所有选中的消息 DOM 元素。弹窗快照与实际截取之间聊天区可能被重渲染/删消息，
+        // 因此这里重新统计「实际存在的楼层」，并让报数、文件名都以它为准——
+        // 否则会出现「弹窗显示 5 条、实际只生成 3 张」却仍提示成功、文件名还标着全区间。
         const msgElements = [];
+        const actualIds = [];
         for (const msgId of sortedIds) {
             const el = document.querySelector(`#chat .mes[mesid="${msgId}"]`);
             if (el) {
                 msgElements.push(el);
+                actualIds.push(msgId);
             } else {
                 Logger.warn(`截图跳过: 找不到消息 #${msgId}`);
             }
@@ -474,13 +494,17 @@ export async function captureScreenshotMessages(messageIds) {
             return;
         }
 
+        if (actualIds.length !== sortedIds.length) {
+            toastr.warning(`有 ${sortedIds.length - actualIds.length} 条消息已不在聊天区，实际截取 ${actualIds.length} 条`);
+        }
+
         // 单条消息：直接对元素截图
         if (msgElements.length === 1) {
             Logger.debug('截图: 单条消息模式，直接对元素截图');
             const canvas = await captureSingle(lib, msgElements[0]);
             toastr.clear(progressToast);
             if (canvas) {
-                const filename = `chat_#${sortedIds[0]}_${Date.now()}.png`;
+                const filename = `chat_#${actualIds[0]}_${Date.now()}.png`;
                 Logger.success(`截图: 单条消息截图成功，准备下载: ${filename}`);
                 downloadCanvas(canvas, filename);
             } else {
@@ -495,7 +519,6 @@ export async function captureScreenshotMessages(messageIds) {
 
         // 读取 #chat 消息之间的实际垂直间距
         const chatArea = document.getElementById('chat');
-        const chatWidth = chatArea ? chatArea.clientWidth : 800;
         const bgColor = chatArea
             ? getComputedStyle(chatArea).backgroundColor || '#1e1e1e'
             : '#1e1e1e';
@@ -516,27 +539,48 @@ export async function captureScreenshotMessages(messageIds) {
             if (canvas) canvases.push(canvas);
         }
 
+        if (canvases.length === 0) {
+            toastr.clear(progressToast);
+            Logger.error('截图: 所有消息的 Canvas 生成均失败');
+            toastr.error('截图生成失败：没有可用的图片');
+            return;
+        }
+
         // 垂直拼接所有 canvas
         const totalWidth = Math.max(...canvases.map(c => c.width));
         const totalHeight = canvases.reduce((sum, c, i) => sum + c.height + (i < canvases.length - 1 ? msgGap * 2 : 0), 0);
+        // 拼接画布同样受浏览器画布上限约束（单条截图的 14000 上限只作用于元素截图）。
+        // 超限时等比缩小，避免生成空白/截断图片却仍提示成功。
+        const scale = Math.min(1, MAX_CANVAS_DIMENSION / totalWidth, MAX_CANVAS_DIMENSION / totalHeight);
+        if (scale < 1) {
+            Logger.warn(`截图拼接尺寸过大（${totalWidth}x${totalHeight}），按 ${scale.toFixed(3)} 等比缩小`);
+            toastr.warning('截图内容过长，已自动缩小以保证完整');
+        }
         const merged = document.createElement('canvas');
-        merged.width = totalWidth;
-        merged.height = totalHeight;
+        merged.width = Math.max(1, Math.floor(totalWidth * scale));
+        merged.height = Math.max(1, Math.floor(totalHeight * scale));
         const ctx = merged.getContext('2d');
+        if (!ctx) {
+            toastr.clear(progressToast);
+            toastr.error('截图生成失败：无法创建画布');
+            return;
+        }
         ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, totalWidth, totalHeight);
+        ctx.fillRect(0, 0, merged.width, merged.height);
 
         let yOffset = 0;
         for (let i = 0; i < canvases.length; i++) {
             // 居中绘制（某些消息宽度可能不同）
-            const xOffset = Math.floor((totalWidth - canvases[i].width) / 2);
-            ctx.drawImage(canvases[i], xOffset, yOffset);
+            const drawWidth = Math.max(1, Math.floor(canvases[i].width * scale));
+            const drawHeight = Math.max(1, Math.floor(canvases[i].height * scale));
+            const xOffset = Math.floor((merged.width - drawWidth) / 2);
+            ctx.drawImage(canvases[i], xOffset, Math.floor(yOffset * scale), drawWidth, drawHeight);
             yOffset += canvases[i].height + msgGap * 2;
         }
         toastr.clear(progressToast);
 
-        const filename = `chat_#${sortedIds[0]}-#${sortedIds[sortedIds.length - 1]}_${Date.now()}.png`;
-        Logger.success(`截图: 多条消息逐条拼接成功 (${canvases.length} 条), 准备下载: ${filename}`);
+        const filename = `chat_#${actualIds[0]}-#${actualIds[actualIds.length - 1]}_${Date.now()}.png`;
+        Logger.success(`截图: 多条消息逐条拼接成功 (${canvases.length} 条，实际楼层 ${actualIds.join(',')}), 准备下载: ${filename}`);
         downloadCanvas(merged, filename);
 
     } catch (err) {
@@ -778,7 +822,8 @@ function downloadCanvas(canvas, filename) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        // 立即 revoke 会让部分浏览器（Firefox）取消尚未开始的下载，延迟释放
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         Logger.success(`截图已下载: ${a.download} (${(blob.size / 1024).toFixed(1)} KB)`);
         toastr.success(`截图已保存: ${a.download} (${(blob.size / 1024).toFixed(1)} KB)`);
     }, SCREENSHOT_TYPE, SCREENSHOT_QUALITY);

@@ -1,33 +1,21 @@
 // ui/preview.js - 上下文查看与预览模式
 
-import { getContext, extension_settings } from '../../../../extensions.js';
-import { saveSettingsDebounced, reloadCurrentChat, addOneMessage, messageFormatting } from '../../../../../script.js';
+import { getContext } from '../../../../extensions.js';
+import { reloadCurrentChat, addOneMessage, messageFormatting } from '../../../../../script.js';
 import { timestampToMoment } from '../../../../utils.js';
-import { state, PLUGIN_NAME } from '../state.js';
-import { getFullChatData } from '../api.js';
-import { addFavoriteIconsToMessages, refreshFavoriteIconsInView } from '../core.js';
-import { openFavoritesModal, renderIframesInElement, applySavedTheme } from './main.js';
+import { state, getSetting, setSetting, findChatData } from '../state.js';
+import { getFullChatData } from '../chat-data.js';
+import { escapeHtml, stripJsonlExt } from '../utils.js';
+import { addFavoriteIconsToMessages, flushPendingFavoriteSave, refreshFavoriteIconsInView } from '../core.js';
+import { renderIframesInElement } from './iframes.js';
 import { showContextRangeSettingsPopup } from './settings.js';
-import { showScreenshotPopup, captureScreenshotMessages, captureElementScreenshot } from './screenshot.js';
+import { applySavedTheme } from './theme.js';
+import { captureElementScreenshot } from './screenshot.js';
 import Logger from '../Logger.js';
 
-// Constants from main.js
-const SEARCH_FILTER_CLASS = 'favorites-search-filter';
-const SEARCH_INPUT_CLASS = 'favorites-search-input';
-const SEARCH_CONTAINER_CLASS = 'favorites-search-container';
-const PREVIEW_EXIT_BUTTON_ID = 'favorites-preview-exit-button';
-const MODAL_CLASS_NAME = 'favorites-modal-dialog';
 
-/**
- * HTML 转义：发送者名等用户可控文本插入 HTML 前必须转义，防止自 XSS。
- */
-function escapeHtml(str) {
-    return String(str == null ? '' : str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
+// =================================================================
+//           AUTO-HIDE PREVIEW TOGGLE ON SCROLL/LONG-PRESS
 // =================================================================
 //           AUTO-HIDE PREVIEW TOGGLE ON SCROLL/LONG-PRESS
 // =================================================================
@@ -51,6 +39,12 @@ function _showPreviewToggle() {
 }
 
 function _setupPreviewAutoHide() {
+    // 幂等：在预览里再预览另一条收藏（面板 👁 的常规用法）会再次进入本函数。
+    // 不先摘掉上一对监听的话，state._previewAutoHideHandlers 被覆盖后旧引用就再也取不回来，
+    // 长会话里 scroll / contextmenu 监听会无上限累积（旧处理器因首行的 isPreviewingContext
+    // 守卫而不会改变行为，所以只泄漏不报错）。
+    _teardownPreviewAutoHide();
+
     const chatEl = document.getElementById('chat');
     if (!chatEl) return;
 
@@ -104,7 +98,7 @@ export function showContextMessagesFrame(messages, highlightedIndex, chatContext
     if (existingFrame) existingFrame.remove();
 
     // 单消息显示为默认模式，记忆用户切换偏好
-    let currentMode = extension_settings[PLUGIN_NAME]?.contextViewMode || 'single';
+    let currentMode = getSetting('contextViewMode');
     if (currentMode !== 'single' && currentMode !== 'context') currentMode = 'single';
 
     // 当前查看的 swipe 在收藏 swipe 列表中的索引
@@ -120,7 +114,7 @@ export function showContextMessagesFrame(messages, highlightedIndex, chatContext
                 <div class="context-messages-header">
                     <div class="context-title">消息上下文</div>
                     <div class="context-header-actions">
-                        <div class="context-swipe-control" style="display:none">
+                        <div class="context-swipe-control">
                             <div class="context-swipe-nav context-swipe-nav-left" title="上一个收藏的Swipe"><i class="fa-solid fa-chevron-left"></i></div>
                             <span class="context-swipe-counter">1 / 1</span>
                             <div class="context-swipe-nav context-swipe-nav-right" title="下一个收藏的Swipe"><i class="fa-solid fa-chevron-right"></i></div>
@@ -159,10 +153,10 @@ export function showContextMessagesFrame(messages, highlightedIndex, chatContext
 
     // 自定义滚动条：上下文列表模式与单消息模式各一条（同一位置，按 data-mode 显隐）
     const contextScrollbar = document.createElement('div');
-    contextScrollbar.className = 'k-scrollerbar k-scrollerbar-context';
+    contextScrollbar.className = 'star-scrollerbar star-scrollerbar-context';
     container.prepend(contextScrollbar);
     const singleScrollbar = document.createElement('div');
-    singleScrollbar.className = 'k-scrollerbar k-scrollerbar-single';
+    singleScrollbar.className = 'star-scrollerbar star-scrollerbar-single';
     container.prepend(singleScrollbar);
 
     // 生成滚动条处理器：滚动时显示进度条（随进度增高），停止滚动 1.5s 后淡出
@@ -224,7 +218,7 @@ export function showContextMessagesFrame(messages, highlightedIndex, chatContext
         if (prevDetails) reasoningWasOpen = prevDetails.hasAttribute('open');
 
         const activeSwipeId = favoritedSwipeIds.length > 0 ? favoritedSwipeIds[currentSwipeIndex] : targetSwipeId;
-        singleView.innerHTML = renderSingleContextMessage(highlightedMsgData, chatContextForAvatar, activeSwipeId, favoritedSwipeIds, currentSwipeIndex);
+        singleView.innerHTML = renderSingleContextMessage(highlightedMsgData, chatContextForAvatar, activeSwipeId);
         renderIframesInElement($(singleView));
 
         if (reasoningWasOpen) {
@@ -326,8 +320,7 @@ export function showContextMessagesFrame(messages, highlightedIndex, chatContext
     frameElement.querySelector('.context-mode-toggle').addEventListener('click', (e) => {
         e.stopPropagation();
         currentMode = currentMode === 'single' ? 'context' : 'single';
-        extension_settings[PLUGIN_NAME].contextViewMode = currentMode;
-        saveSettingsDebounced();
+        setSetting('contextViewMode', currentMode);
         applyMode();
     });
 
@@ -428,7 +421,7 @@ export function renderContextMessage(msgData, isHighlighted, chatContext, target
  * 布局：头像(第一行居中) → 名称(第二行居中) → 内心独白(第三行左对齐) → 正文(第四行) → 时间(底部斜体灰色)。
  * 多个被收藏的 swipe 时附带左右切换箭头。
  */
-export function renderSingleContextMessage(msgData, chatContext, swipeId, favoritedSwipeIds = [], currentSwipeIndex = 0) {
+export function renderSingleContextMessage(msgData, chatContext, swipeId) {
     const { message, originalIndex } = msgData;
     if (!message) return '';
     const isUser = message.is_user;
@@ -542,15 +535,12 @@ export function scrollToMessage(messageId, alignment = 'start', behavior = 'auto
  */
 export async function enterPreviewMode(messageId, chatFileNoExt) {
     Logger.info(`进入预览模式: msgId=${messageId}, chatFile=${chatFileNoExt}`);
-    const { closeFavoritesModal } = await import('./main.js');
-    closeFavoritesModal();
-    state.isPreviewingContext = true;
 
-    const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileNoExt);
+    // 先校验再关闭面板：加载失败时保留面板，不把用户留在「面板没了、预览也没进」的空状态
+    const chatData = findChatData(chatFileNoExt);
     if (!chatData || !chatData.messages) {
         Logger.error('进入预览模式失败: 无法加载聊天数据');
         toastr.error('无法加载预览上下文的消息。');
-        state.isPreviewingContext = false;
         return;
     }
 
@@ -558,13 +548,32 @@ export async function enterPreviewMode(messageId, chatFileNoExt) {
     const msgIndex = parseInt(messageId, 10);
     if (isNaN(msgIndex) || msgIndex < 0 || msgIndex >= messagesArray.length) {
         toastr.error(`无效的消息索引: ${messageId}`);
-        state.isPreviewingContext = false;
         return;
     }
 
+    state.isPreviewingContext = true;
+
+    // 记录「预览的是哪个聊天」：预览期间用户仍可能打开收藏面板并切到别的角色，
+    // 聊天区的收藏操作必须锁定这个值，否则会写进面板正在浏览的另一个聊天文件。
+    state.previewingChatFile = stripJsonlExt(chatFileNoExt);
+
+    try {
+        const { closeFavoritesModal } = await import('./modal-gateway.js');
+        closeFavoritesModal();
+    } catch (e) {
+        // 面板模块解析失败时预览本身仍可进行，只把问题显式抛给用户与日志，不静默
+        Logger.error('加载收藏面板模块失败（不影响预览）:', e);
+    }
+
+    // 截图选择属于「本次预览的楼层范围」：上一次预览的选择在这里必须作废，
+    // 否则换成另一个窗口后弹窗仍按旧区间报数，而那份区间里的楼层已不在 #chat 里
+    // （表现为弹窗写「已选 3 条」、实际只截到交集的那 1 条）。
+    state.screenshotSelection = null;
+
+    // 取 5 条窗口，并在聊天尾部向前补偿（固定「前置 2 条」会让 endIndex 提前撞到 len，
+    // 收藏最后一条消息时只显示 3 条，与「预览固定加载 5 条」的说明不符）。
     const totalMessagesToShow = Math.min(messagesArray.length, 5);
-    const targetIndexInSlice = msgIndex - Math.max(0, msgIndex - 2);
-    const startIndex = Math.max(0, msgIndex - targetIndexInSlice);
+    const startIndex = Math.max(0, Math.min(msgIndex - 2, messagesArray.length - totalMessagesToShow));
     const endIndex = Math.min(messagesArray.length, startIndex + totalMessagesToShow);
     const contextMessages = messagesArray.slice(startIndex, endIndex);
 
@@ -596,27 +605,28 @@ export async function enterPreviewMode(messageId, chatFileNoExt) {
             addOneMessage(message, { forceId: originalIndexInSourceChat });
             const $newMessageElement = $(`#chat .mes[mesid="${originalIndexInSourceChat}"]`);
             if ($newMessageElement.length) {
-                const { renderIframesInElement: _renderIframes } = await import('./main.js');
-                _renderIframes($newMessageElement);
+                renderIframesInElement($newMessageElement);
             }
         }
 
         // 在预览模式下也添加收藏图标
         addFavoriteIconsToMessages();
 
-        // 更新收藏图标状态，使用预览的聊天数据
-        if (chatData && chatData.metadata && Array.isArray(chatData.metadata.favorites)) {
-            $('#chat').find('.mes').each(function() {
-                const messageId = $(this).attr('mesid');
-                if (messageId) {
-                    const isFavorited = chatData.metadata.favorites.some(fav => fav.messageId === messageId);
-                    const toggleIcon = $(this).find('.favorite-toggle-icon');
-                    if (toggleIcon.length) {
-                        toggleIcon.toggleClass('favorited', isFavorited);
-                    }
-                }
-            });
-        }
+        // 收藏图标状态必须按「当前显示的 swipe」判定，而不是「这条消息有没有收藏」：
+        // 同一条消息收藏的是别的 swipe 时，按消息判定会让图标显示成已收藏，用户点下去
+        // 反而给当前 swipe 新加一条收藏——正是「在预览里取消收藏没有作用，消息依然被收藏」。
+        // 判定规则与 core.js 的 refreshFavoriteIconsInView 保持一致，且用预览聊天自己的消息数组。
+        $('#chat').find('.mes').each(function() {
+            const messageId = $(this).attr('mesid');
+            if (messageId === undefined || messageId === null) return;
+            const message = messagesArray[parseInt(messageId, 10)];
+            const swipeId = message?.swipe_id || 0;
+            const isFavorited = !!(message && message.swipe_info && message.swipe_info[swipeId] && message.swipe_info[swipeId].star_favorite);
+            const toggleIcon = $(this).find('.favorite-toggle-icon');
+            if (toggleIcon.length) {
+                toggleIcon.toggleClass('favorited', isFavorited);
+            }
+        });
 
         scrollToMessage(messageId, 'start', 'auto', 150);
     } finally {
@@ -645,67 +655,19 @@ export async function exitPreviewMode() {
     $('#top-bar').css('display', 'flex');
     $('#top-settings-holder').css('display', 'flex');
 
+    // 退出预览会 reloadCurrentChat()：ST 会从文件重新读取 chat 与 chat_metadata，
+    // 把内存里还没落库的收藏改动直接覆盖掉（预览里取消收藏后收藏又「回来」）。
+    // 因此必须先 flush 待保存的收藏改动，再 reload。
+    await flushPendingFavoriteSave();
+
     await reloadCurrentChat();
     state.isPreviewingContext = false;
+    state.previewingChatFile = null;
     setTimeout(refreshFavoriteIconsInView, 200);
 }
 
-/**
- * Sets up the preview mode UI elements.
- */
-export function setupPreviewModeUI() {
-    // 创建按钮容器（固定在右侧）
-    let container = document.getElementById('favorites-preview-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.id = 'favorites-preview-container';
-        document.body.appendChild(container);
-    }
-
-    if (!document.getElementById('favorites-preview-toggle')) {
-        state.previewToggleElement = document.createElement('div');
-        state.previewToggleElement.id = 'favorites-preview-toggle';
-        state.previewToggleElement.innerHTML = '<i class="fa-solid fa-eye"></i>';
-        state.previewToggleElement.title = '打开收藏面板';
-        state.previewToggleElement.addEventListener('click', () => openFavoritesModal());
-        container.appendChild(state.previewToggleElement);
-    }
-
-    // 创建截图按钮（位于预览按钮正下方，圆框大小一致）
-    if (!document.getElementById('favorites-screenshot-toggle')) {
-        state.screenshotToggleElement = document.createElement('div');
-        state.screenshotToggleElement.id = 'favorites-screenshot-toggle';
-        state.screenshotToggleElement.innerHTML = '<i class="fa-solid fa-camera"></i>';
-        state.screenshotToggleElement.title = '截图预览消息';
-        state.screenshotToggleElement.addEventListener('click', async () => {
-            const result = await showScreenshotPopup();
-            if (result && result.length > 0) {
-                captureScreenshotMessages(result);
-            }
-        });
-        container.appendChild(state.screenshotToggleElement);
-    }
-
-    // --- MODIFIED LOGIC ---
-    // 寻找正确的挂载点
-    const formSheld = document.getElementById('form_sheld');
-    if (!formSheld) {
-        Logger.error('#form_sheld not found! Cannot attach exit preview button.');
-        return;
-    }
-
-    if (!document.getElementById(PREVIEW_EXIT_BUTTON_ID)) {
-        state.previewExitButtonElement = document.createElement('button');
-        state.previewExitButtonElement.id = PREVIEW_EXIT_BUTTON_ID;
-        state.previewExitButtonElement.className = 'menu_button';
-        state.previewExitButtonElement.textContent = '结束预览';
-        state.previewExitButtonElement.addEventListener('click', exitPreviewMode);
-
-        // **将按钮添加到 #form_sheld 而不是 body**
-        formSheld.appendChild(state.previewExitButtonElement);
-    }
-
-}
+// 注：常驻悬浮按钮（收藏面板入口 / 截图入口 / 结束预览）已移至 bootstrap/floating-buttons.js，
+// 使本模块（及收藏面板等重依赖）不必在插件启动时加载。
 
 /**
  * 构建某条消息所有被收藏的 swipe id 列表。
@@ -713,7 +675,7 @@ export function setupPreviewModeUI() {
  */
 function buildFavoritedSwipeIds(messagesArray, msgIndex, chatFileNoExt) {
     // 优先复用已构建的虚拟收藏，顺序与收藏面板导航完全一致
-    const cachedChatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileNoExt);
+    const cachedChatData = findChatData(chatFileNoExt);
     if (cachedChatData && Array.isArray(cachedChatData.favorites)) {
         const favItem = cachedChatData.favorites.find(f => String(f.messageId) === String(msgIndex));
         if (favItem && Array.isArray(favItem.favoritedSwipes) && favItem.favoritedSwipes.length > 0) {
@@ -734,6 +696,38 @@ function buildFavoritedSwipeIds(messagesArray, msgIndex, chatFileNoExt) {
 }
 
 /**
+ * 解析某个聊天文件属于哪个角色/群组（缓存 → 角色收藏索引 → 当前上下文）。
+ * 只用于「缓存里找不到该聊天」的兜底读取：绝不能用当前聊天的角色身份去读别的角色的文件。
+ * @returns {{isGroup: boolean, characterId: (number|undefined), groupId: (string|undefined|number)}|null}
+ */
+function resolveChatIdentity(chatFileNoExt) {
+    const key = stripJsonlExt(chatFileNoExt);
+
+    const cached = state.allChatsFavoritesData.find(c => stripJsonlExt(c.fileName) === key);
+    if (cached) {
+        return { isGroup: !!cached.isGroup, characterId: cached.characterId, groupId: cached.groupId };
+    }
+
+    // 角色切换器按「名字 + 头像」记录身份：characterId 可能因会话内角色增删而漂移，
+    // 因此 name/avatar 才是可靠线索（与 ui/main.js 的 loadSingleChatData 同规则）。
+    const context = getContext();
+    for (const entry of (state.charactersWithFavorites || [])) {
+        if (!(entry.chatsWithFavorites || []).some(c => stripJsonlExt(c.fileName) === key)) continue;
+        if (entry.isGroup) {
+            return { isGroup: true, groupId: entry.groupId !== undefined ? entry.groupId : entry.characterId };
+        }
+        let characterId = entry.characterId !== undefined ? entry.characterId : null;
+        if (characterId === null || !context.characters || !context.characters[characterId]) {
+            const byName = (context.characters || []).findIndex(c => c && c.name === entry.name);
+            characterId = byName >= 0 ? byName : null;
+        }
+        if (characterId !== null) return { isGroup: false, characterId, groupId: null };
+    }
+
+    return null;
+}
+
+/**
  * Handles viewing the context of a message.
  */
 export async function handleViewContext(messageId, chatFileNoExt, targetSwipeId = null) {
@@ -743,7 +737,7 @@ export async function handleViewContext(messageId, chatFileNoExt, targetSwipeId 
         let messagesArray = [];
         let chatContextForAvatar = null;
 
-        const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === chatFileNoExt);
+        const chatData = findChatData(chatFileNoExt);
 
         if (chatData) {
             messagesArray = chatData.messages || [];
@@ -753,15 +747,24 @@ export async function handleViewContext(messageId, chatFileNoExt, targetSwipeId 
                 groupId: chatData.groupId,
             };
         } else {
-            const isCurrentChat = String(context.chatId || '').replace('.jsonl', '') === chatFileNoExt;
+            const isCurrentChat = stripJsonlExt(context.chatId || '') === chatFileNoExt;
             if (isCurrentChat) {
                 messagesArray = context.chat || [];
                 chatContextForAvatar = { isGroup: !!context.groupId, characterId: context.characterId, groupId: context.groupId };
             } else {
-                 const fullChatData = await getFullChatData(context.characterId, context.groupId, chatFileNoExt, !!context.groupId);
+                // 兜底分支必须用**这个聊天自己的**角色/群组身份。
+                // 用 context.characterId / context.groupId 是当前聊天所属角色，而 chatFileNoExt 可能
+                // 属于另一个角色（跨角色浏览），getFullChatData 会按当前角色解析文件名——
+                // 要么读到别的角色的同名文件，要么直接返回 null 报「无法获取消息上下文」。
+                const identity = resolveChatIdentity(chatFileNoExt);
+                if (!identity) {
+                    toastr.error('无法确定该聊天的所属角色，请重新打开收藏面板后再试');
+                    return;
+                }
+                const fullChatData = await getFullChatData(identity.characterId, identity.groupId, chatFileNoExt, !!identity.isGroup);
                 if (fullChatData && Array.isArray(fullChatData.messages)) {
                     messagesArray = fullChatData.messages;
-                    chatContextForAvatar = { isGroup: !!context.groupId, characterId: context.characterId, groupId: context.groupId };
+                    chatContextForAvatar = identity;
                 } else {
                     toastr.error('无法获取消息上下文');
                     return;
@@ -776,11 +779,8 @@ export async function handleViewContext(messageId, chatFileNoExt, targetSwipeId 
         }
 
         // --- NEW LOGIC: Get context based on settings ---
-        // 确保设置存在
-        if (!extension_settings[PLUGIN_NAME]) {
-            extension_settings[PLUGIN_NAME] = {};
-        }
-        const range = extension_settings[PLUGIN_NAME].contextViewRange ?? 1;
+        // 需要查看的上下文条数（前置 n 条 + 当前 + 后置 n 条）
+        const range = getSetting('contextViewRange');
         const contextMessages = [];
 
         // 1. Get previous messages

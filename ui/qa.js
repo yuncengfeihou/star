@@ -1,8 +1,7 @@
 // ui/qa.js - AI答疑面板模块（支持流式传输、完善消息渲染、自定义API）
 
-import { extension_settings } from '../../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../../script.js';
-import { state, PLUGIN_NAME } from '../state.js';
+import { state, getSetting, setSetting } from '../state.js';
+import { escapeHtml, isSafeLinkUrl } from '../utils.js';
 import { getUsageGuidePlainText } from './settings.js';
 import Logger from '../Logger.js';
 
@@ -21,6 +20,130 @@ const QA_INPUT_CLASS = 'star-qa-input';
 const QA_SEND_CLASS = 'star-qa-send';
 const QA_STOP_CLASS = 'star-qa-stop';
 const QA_TYPING_CLASS = 'star-qa-typing';
+/** 流式生成期间挂在气泡上的标记类（样式见 style.css：抑制入场动画重放） */
+const QA_STREAMING_CLASS = 'star-qa-streaming';
+
+// =================================================================
+//                  流式气泡渲染（增量 + 帧节流）
+// =================================================================
+// 思维链/正文都是「边收边渲染」的 Markdown：正文里出现 `**半截` 或 ``` 未闭合时，
+// 增量拼接单个文本节点会渲染错，所以仍按整段重建 innerHTML；但重建必须满足三个条件，
+// 否则会出现「点一下展开，下一帧就自己合上」「看着一直在闪」「滚上去读又被拽回底部」：
+//   1. 每帧最多重建一次（此前每个 SSE 分片重建一次，一次回复可达数百次）；
+//   2. 重建前后保持 <details> 的 open 状态与思维链内部的滚动位置；
+//   3. 只有用户本来就在底部时才自动跟随滚动（滚上去读思考过程时不打扰）。
+
+/** 每个气泡的渲染状态（WeakMap：气泡节点被移除后自动回收，不需要手动清理） */
+const qaRenderStates = new WeakMap();
+
+/** 帧节流用的 rAF id（同一帧内多个分片只重建一次） */
+let streamRenderRafId = null;
+/** 补帧用的 rAF id：本帧已排队时，再排一帧保证最后一批文本一定被渲染出来 */
+let streamRenderTrailingId = null;
+/** 排队中的「最新一次」重建请求（rAF 回调读它，而不是读闭包里冻结的旧文本） */
+const pendingRender = { bubbleEl: null, content: '', reasoning: '', onRendered: null };
+
+/** 距底部 24px 以内视为「正在跟随最新消息」 */
+const QA_NEAR_BOTTOM_PX = 24;
+
+/** 本次渲染前用户是否停在消息区底部（滚动被用户接管时不再强行拉回底部） */
+function isQABodyNearBottom(body) {
+    if (!body) return true;
+    return body.scrollHeight - body.scrollTop - body.clientHeight <= QA_NEAR_BOTTOM_PX;
+}
+
+function getQARenderState(bubbleEl) {
+    let st = qaRenderStates.get(bubbleEl);
+    if (!st) {
+        // open / scrollTop 依赖「已渲染过」才有意义，首帧按折叠 + 顶部处理
+        st = { content: null, reasoning: null, open: false, scrollTop: 0 };
+        qaRenderStates.set(bubbleEl, st);
+    }
+    return st;
+}
+
+/**
+ * 按当前内容重建气泡，并保持思维链的展开状态、内部滚动位置与消息区滚动位置。
+ * @param {HTMLElement} bubbleEl - .star-qa-bubble
+ * @param {string} content - 正文
+ * @param {string} reasoning - 思维链（reasoning_content）
+ */
+function renderQABubble(bubbleEl, content, reasoning = '') {
+    if (!bubbleEl) return;
+    const st = getQARenderState(bubbleEl);
+
+    // 重建前先抓住会被 innerHTML 抹掉的用户状态
+    const prevDetails = bubbleEl.querySelector('.star-qa-reasoning');
+    st.open = prevDetails ? prevDetails.hasAttribute('open') : false;
+    const prevContent = bubbleEl.querySelector('.star-qa-reasoning-content');
+    if (prevContent) st.scrollTop = prevContent.scrollTop;
+
+    bubbleEl.innerHTML = formatQAContent(content, reasoning);
+
+    const details = bubbleEl.querySelector('.star-qa-reasoning');
+    if (details && st.open) details.setAttribute('open', '');
+    const contentEl = bubbleEl.querySelector('.star-qa-reasoning-content');
+    if (contentEl) contentEl.scrollTop = st.scrollTop;
+
+    st.content = content;
+    st.reasoning = reasoning;
+}
+
+/**
+ * 流式渲染：帧节流 + 内容不变则跳过。
+ * 同一帧内的多个分片只重建一次 DOM，且回调执行时用的永远是最新文本。
+ * @param {HTMLElement} bubbleEl
+ * @param {string} content
+ * @param {string} reasoning
+ * @param {() => void} [onRendered] - 重建完成后执行（滚动跟随）
+ */
+function scheduleQAStreamRender(bubbleEl, content, reasoning, onRendered) {
+    const st = getQARenderState(bubbleEl);
+    if (st.content === content && st.reasoning === reasoning) return;
+
+    // 排队的是「最新一次请求」，而不是某个闭包里冻结的旧文本：
+    // 同一帧内的后一个分片会覆盖前一个，回调执行时永远拿到最新内容。
+    pendingRender.bubbleEl = bubbleEl;
+    pendingRender.content = content;
+    pendingRender.reasoning = reasoning;
+    pendingRender.onRendered = onRendered;
+
+    const makeRunner = (which) => () => {
+        if (which === 'main') streamRenderRafId = null;
+        else streamRenderTrailingId = null;
+        const { bubbleEl: el, content: text, reasoning: chain, onRendered: after } = pendingRender;
+        if (!el || !el.isConnected) return;
+        renderQABubble(el, text, chain);
+        if (typeof after === 'function') after();
+    };
+
+    if (streamRenderRafId === null && streamRenderTrailingId === null) {
+        streamRenderRafId = requestAnimationFrame(makeRunner('main'));
+    } else if (streamRenderTrailingId === null) {
+        // 本帧已排队：再补一帧，保证最后一批文本不会停在排队前的内容上
+        streamRenderTrailingId = requestAnimationFrame(makeRunner('trailing'));
+    }
+}
+
+/** 流式结束后收尾：取消排队中的重建、清掉标记类与渲染状态 */
+function finishQAStreamRender(bubbleEl) {
+    if (streamRenderRafId !== null) {
+        cancelAnimationFrame(streamRenderRafId);
+        streamRenderRafId = null;
+    }
+    if (streamRenderTrailingId !== null) {
+        cancelAnimationFrame(streamRenderTrailingId);
+        streamRenderTrailingId = null;
+    }
+    pendingRender.bubbleEl = null;
+    pendingRender.content = '';
+    pendingRender.reasoning = '';
+    pendingRender.onRendered = null;
+    if (!bubbleEl) return;
+    bubbleEl.classList.remove(QA_STREAMING_CLASS);
+    qaRenderStates.delete(bubbleEl);
+}
+
 
 /**
  * 构建系统提示词（内置知识库）。
@@ -38,7 +161,7 @@ ${getUsageGuidePlainText()}
 # 第二部分：补充技术细节（使用说明之外的精确信息）
 
 ## 插件基本信息
-「聊天收藏器」(Star) 是一个 SillyTavern 扩展插件，当前版本 v2.2.0（作者 uhhhh15）。它帮助用户在与 AI 角色/群组聊天时收藏重要的消息，并提供备注、搜索、上下文预览、截图导出、跨角色浏览、AI 答疑等能力。安装并启用后，魔法棒🪄扩展菜单中会出现「收藏」按钮（星形图标+文字"收藏"）。
+「聊天收藏器」(Star) 是一个 SillyTavern 扩展插件，当前版本 v2.3.0（作者 uhhhh15）。它帮助用户在与 AI 角色/群组聊天时收藏重要的消息，并提供备注、搜索、上下文预览、截图导出、跨角色浏览、AI 答疑等能力。安装并启用后，魔法棒🪄扩展菜单中会出现「收藏」按钮（星形图标+文字"收藏"）。
 
 ## 收藏与取消收藏
 1. 每条消息右上角（角色名旁的操作按钮区）有一个半透明的空心星形图标：**单击**收藏（变为实心黄色），**再次单击**取消收藏（恢复空心），取消时无确认弹窗。
@@ -133,7 +256,7 @@ ${getUsageGuidePlainText()}
 ## 数据存储与备份
 - **收藏数据**实际存储在聊天文件（.jsonl）每条消息的 swipe_info 结构中（message.swipe_info[swipeId].star_favorite，字段含 id、note 备注、create_date 创建时间），随聊天记录一起保存在服务端 chats 目录，随聊天一起备份/迁移。**删除聊天文件 = 丢失该聊天所有收藏**。
 - UI 读取时通过 core.js 的 buildVirtualFavorites() 把 swipe_info 汇总为"虚拟 favorites 数组"挂在 chatMetadata.favorites 上供界面使用——它只是运行时虚拟数据，**不会写入文件**。
-- 收藏数会以 favorites_count 字段形式保存，供角色/聊天列表接口快速筛选，不会把虚拟收藏数组写入文件造成臃肿；另会注入 favorites_updated_at 时间戳，作为收藏索引缓存的增量刷新信号（时间戳变化 = 收藏可能变化）。
+- 收藏数会以 favorites_count 字段形式保存，供角色/聊天列表接口快速筛选，不会把虚拟收藏数组写入文件造成臃肿；另会注入 favorites_updated_at 时间戳（作为收藏索引缓存的增量刷新信号）与 favorites_index_version（标记索引格式版本，读取侧据此判断 favorites_count 是否可信——旧版本曾写出过「有收藏但计数为 0」的脏索引）。索引字段同时写在实时 chat_metadata 上，SillyTavern 自己保存聊天时也会带上正确的值。
 - **插件设置**（主题、每页数量、上下文范围、日志面板开关、QA 配置等）存储在 SillyTavern 的 extension_settings 中（键名 star）。
 - 收藏**不会自动跨设备同步**，请使用 SillyTavern 自带的下载备份/导入备份功能迁移。
 
@@ -234,12 +357,13 @@ export function ensureQAStructure() {
         hcss('border-bottom', '1px solid var(--star-border-main)');
         hcss('background-color', 'var(--star-bg-header)');
         hcss('gap', '8px');
+        // 头部：类名驱动样式（原先 8 处内联 style 已回收进 style.css 的 .star-qa-* 规则）
         header.innerHTML = `
-            <h3 class="${QA_TITLE_CLASS}" style="flex:1;margin:0;font-size:16px;font-weight:600;color:var(--star-text-main);">🤖 Star 小助手</h3>
-            <div class="star-qa-clear-btn" title="清空对话" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:14px;color:var(--star-text-muted);"><i class="fa-solid fa-broom"></i></div>
-            <div class="star-qa-settings-btn" title="AI答疑设置" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:14px;color:var(--star-text-muted);"><i class="fa-solid fa-gear"></i></div>
-            <div class="star-qa-min-btn" title="最小化" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:14px;color:var(--star-text-muted);"><i class="fa-solid fa-minus"></i></div>
-            <div class="${QA_CLOSE_CLASS}" title="关闭" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:8px;font-size:16px;color:var(--star-text-muted);"><i class="fa-solid fa-xmark"></i></div>
+            <h3 class="${QA_TITLE_CLASS}">🤖 Star 小助手</h3>
+            <div class="star-qa-icon-btn star-qa-clear-btn" title="清空对话" role="button" tabindex="0" aria-label="清空对话"><i class="fa-solid fa-broom" aria-hidden="true"></i></div>
+            <div class="star-qa-icon-btn star-qa-settings-btn" title="AI答疑设置" role="button" tabindex="0" aria-label="AI答疑设置"><i class="fa-solid fa-gear" aria-hidden="true"></i></div>
+            <div class="star-qa-icon-btn star-qa-min-btn" title="最小化" role="button" tabindex="0" aria-label="最小化"><i class="fa-solid fa-minus" aria-hidden="true"></i></div>
+            <div class="star-qa-icon-btn ${QA_CLOSE_CLASS}" title="关闭" role="button" tabindex="0" aria-label="关闭"><i class="fa-solid fa-xmark" aria-hidden="true"></i></div>
         `;
 
         const body = document.createElement('div');
@@ -258,9 +382,9 @@ export function ensureQAStructure() {
         fcss('flex-shrink', '0');
         fcss('background-color', 'var(--star-bg-header)');
         footer.innerHTML = `
-            <textarea class="${QA_INPUT_CLASS}" placeholder="输入你的问题，Enter 发送 / Shift+Enter 换行" rows="1" style="flex:1;resize:none;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;max-height:100px;min-height:40px;outline:none;font-family:inherit;"></textarea>
-            <button class="${QA_STOP_CLASS}" title="停止生成" style="display:none;width:40px;height:40px;border-radius:50%;border:none;align-items:center;justify-content:center;font-size:16px;cursor:pointer;flex-shrink:0;background:rgba(255,68,68,0.85);color:#fff;"><i class="fa-solid fa-stop"></i></button>
-            <button class="${QA_SEND_CLASS}" title="发送" style="width:40px;height:40px;border-radius:50%;border:none;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;flex-shrink:0;background:var(--star-accent-primary);color:#fff;"><i class="fa-solid fa-paper-plane"></i></button>
+            <textarea class="${QA_INPUT_CLASS}" placeholder="输入你的问题，Enter 发送 / Shift+Enter 换行" rows="1"></textarea>
+            <button class="${QA_STOP_CLASS}" title="停止生成"><i class="fa-solid fa-stop" aria-hidden="true"></i></button>
+            <button class="${QA_SEND_CLASS}" title="发送"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
         `;
 
         container.appendChild(header);
@@ -297,18 +421,22 @@ export function ensureQAStructure() {
 
         // 清空对话按钮
         const clearBtn = header.querySelector('.star-qa-clear-btn');
-        clearBtn.addEventListener('click', () => {
+        clearBtn.addEventListener('click', async () => {
             const body = modal.querySelector(`.${QA_BODY_CLASS}`);
             const msgCount = body.querySelectorAll('.star-qa-message').length;
             if (msgCount <= 1) return; // 只有欢迎消息不弹确认
-            import('./components.js').then(m => {
-                m.showConfirmModal('确定要清空所有对话记录吗？', '清空对话', { hideHeader: true, noBorder: true }).then(confirmed => {
-                    if (confirmed) {
-                        resetQAChat();
-                        toastr.info('对话已清空', '', { timeOut: 1500 });
-                    }
-                });
-            });
+
+            try {
+                const { showConfirmModal } = await import('./components.js');
+                const confirmed = await showConfirmModal('确定要清空所有对话记录吗？', '清空对话', { hideHeader: true, noBorder: true });
+                if (confirmed) {
+                    resetQAChat();
+                    toastr.info('对话已清空', '', { timeOut: 1500 });
+                }
+            } catch (error) {
+                Logger.error('打开清空确认弹窗失败:', error);
+                toastr.error('操作失败，请刷新页面');
+            }
         });
 
         // 关闭按钮
@@ -319,11 +447,14 @@ export function ensureQAStructure() {
             if (e.target === modal) closeQAPanel();
         });
 
-        // ESC 关闭
+        // ESC 关闭（仅关闭答疑面板本身；有子浮层/确认弹窗时把 Esc 让给它们）
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && modal.style.getPropertyValue('display') === 'block') {
-                closeQAPanel();
+            if (e.key !== 'Escape') return;
+            if (modal.style.getPropertyValue('display') !== 'block') return;
+            if (document.getElementById('star-qa-settings-overlay') || document.getElementById('star-confirm-modal')) {
+                return;
             }
+            closeQAPanel();
         });
 
         // 窗口大小变化时重新居中
@@ -404,7 +535,7 @@ export function minimizeQAPanel() {
     const btn = document.createElement('div');
     btn.id = 'star-qa-restore-btn';
     btn.className = 'star-qa-restore-btn';
-    const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
+    const savedTheme = getSetting('theme');
     if (savedTheme === 'dark') btn.dataset.starTheme = 'dark';
     btn.title = '恢复 AI 答疑';
     btn.innerHTML = '<i class="fa-solid fa-comment-dots"></i>';
@@ -508,8 +639,7 @@ async function handleQASend(inputEl) {
     scrollQABody(body);
 
     // 检查 API 配置
-    const settings = extension_settings[PLUGIN_NAME];
-    if (!settings.qaApiEndpoint || !settings.qaApiKey) {
+    if (!getSetting('qaApiEndpoint') || !getSetting('qaApiKey')) {
         typingEl.remove();
         appendQAMessage(body, 'assistant',
             '⚠️ 请先配置 API 接口！\n\n' +
@@ -525,41 +655,53 @@ async function handleQASend(inputEl) {
     // 添加用户消息到历史
     conversationHistory.push({ role: 'user', content: message });
 
+    // 流式请求失败时要整条移除的半成品气泡（成功结束时保持挂载）
+    let assistantMsgEl = null;
+
     try {
-        const model = settings.qaModel || 'gpt-3.5-turbo';
+        const model = getSetting('qaModel');
         const useStream = true; // 最终版：固定启用流式传输
 
         // 移除加载动画
         typingEl.remove();
 
         // 创建一个空的助手消息气泡用于流式填充
-        const assistantMsgEl = document.createElement('div');
+        assistantMsgEl = document.createElement('div');
         assistantMsgEl.className = 'star-qa-message star-qa-assistant';
         const bubbleEl = document.createElement('div');
-        bubbleEl.className = 'star-qa-bubble';
+        // 标记为流式：思维链的入场动画在此期间不再重放（样式见 style.css）
+        bubbleEl.className = `star-qa-bubble ${QA_STREAMING_CLASS}`;
         assistantMsgEl.appendChild(bubbleEl);
         body.appendChild(assistantMsgEl);
         scrollQABody(body);
 
-        if (useStream) {
-            await callQAApiStream(settings.qaApiEndpoint, settings.qaApiKey, model, conversationHistory, bubbleEl, body);
-        } else {
-            const response = await callQAApi(settings.qaApiEndpoint, settings.qaApiKey, model, conversationHistory);
-            if (response && response.content) {
-                // 思维链（reasoning_content）单独折叠展示，只有正文写入对话历史
-                bubbleEl.innerHTML = formatQAContent(response.content, response.reasoning);
-                conversationHistory.push({ role: 'assistant', content: response.content });
+        // 清流式标记与挂起的重建：用 try/finally 包住调用，保证「正常结束 / 被停止 / 抛错」三条路径都会清，
+        // 否则气泡会一直带着「流式」状态（思维链的入场动画被永久抑制）。
+        try {
+            if (useStream) {
+                await callQAApiStream(getSetting('qaApiEndpoint'), getSetting('qaApiKey'), model, conversationHistory, bubbleEl, body);
             } else {
-                bubbleEl.innerHTML = '<p>抱歉，API 返回了空回复，请稍后重试。</p>';
+                const response = await callQAApi(getSetting('qaApiEndpoint'), getSetting('qaApiKey'), model, conversationHistory);
+                if (response && response.content) {
+                    // 思维链（reasoning_content）单独折叠展示，只有正文写入对话历史
+                    renderQABubble(bubbleEl, response.content, response.reasoning);
+                    conversationHistory.push({ role: 'assistant', content: response.content });
+                } else {
+                    bubbleEl.innerHTML = '<p>抱歉，API 返回了空回复，请稍后重试。</p>';
+                }
             }
+        } finally {
+            // 这里只做收尾（清流式标记 + 取消排队中的重建）。
+            // 补渲染最后一批文本由 callQAApiStream 自己的 finally 负责——
+            // fullContent / fullReasoning 是那个函数的局部变量，在这一层取不到。
+            finishQAStreamRender(bubbleEl);
         }
-
-        scrollQABody(body);
-
     } catch (error) {
         // 移除任何残留的加载动画
         const remainingTyping = body.querySelector(`.${QA_TYPING_CLASS}`);
         if (remainingTyping) remainingTyping.remove();
+        // 以及可能只写了一半的空气泡，避免错误提示上方留下一个空气泡
+        if (assistantMsgEl) assistantMsgEl.remove();
 
         let errorMsg = '请求失败：' + (error.message || '未知错误');
         if (error.name === 'AbortError') {
@@ -568,6 +710,8 @@ async function handleQASend(inputEl) {
             errorMsg = '⚠️ 网络请求失败，请检查：\n1. API 地址是否正确\n2. 网络连接是否正常\n3. API 服务是否可用';
         } else if (error.message && error.message.includes('401')) {
             errorMsg = '⚠️ API 密钥无效（401 未授权），请检查密钥是否正确。';
+        } else if (error.message && error.message.includes('402')) {
+            errorMsg = '⚠️ API 返回 402（需要付费/额度不足），请检查账户余额或套餐额度。';
         } else if (error.message && error.message.includes('429')) {
             errorMsg = '⚠️ API 请求过于频繁（429），请稍后重试。';
         }
@@ -691,16 +835,12 @@ async function callQAApiStream(endpoint, apiKey, model, messages, bubbleEl, body
                             fullContent += contentDelta;
                         }
                         if (contentDelta || reasoningDelta) {
-                            // 流式重建会重置 details 的 open 状态：记住用户是否已展开内心独白，重建后保持
-                            const reasoningEl = bubbleEl.querySelector('.star-qa-reasoning');
-                            const wasOpen = reasoningEl ? reasoningEl.hasAttribute('open') : false;
-                            // 实时更新气泡内容（内心独白折叠在顶部，正文在下）
-                            bubbleEl.innerHTML = formatQAContent(fullContent, fullReasoning);
-                            if (wasOpen) {
-                                const el = bubbleEl.querySelector('.star-qa-reasoning');
-                                if (el) el.setAttribute('open', '');
-                            }
-                            scrollQABody(body);
+                            // 只在用户本来就在底部时跟随滚动：滚上去读思考过程时不再被拽回底部
+                            const follow = isQABodyNearBottom(body);
+                            // 每帧最多重建一次，并保持思维链的展开状态与内部滚动位置
+                            scheduleQAStreamRender(bubbleEl, fullContent, fullReasoning, () => {
+                                if (follow) scrollQABody(body);
+                            });
                         }
 
                         // 检查 finish_reason
@@ -722,6 +862,9 @@ async function callQAApiStream(endpoint, apiKey, model, messages, bubbleEl, body
         }
     } finally {
         streamAbortController = null;
+        // 帧节流会把「最后一个分片」留在排队状态，而收尾紧接着就会取消排队——
+        // 这里同步补渲染一次，否则最后几个字可能不显示。
+        if (bubbleEl) renderQABubble(bubbleEl, fullContent, fullReasoning);
     }
 }
 
@@ -764,6 +907,7 @@ function formatQAContent(text, reasoning = '') {
                 <span class="star-qa-reasoning-icon"><i class="fa-solid fa-brain"></i></span>
                 <span class="star-qa-reasoning-label">内心独白</span>
                 <span class="star-qa-reasoning-hint">点击查看思考过程</span>
+                <span class="star-qa-reasoning-live" aria-hidden="true"></span>
                 <i class="fa-solid fa-chevron-right star-qa-reasoning-arrow"></i>
             </summary>
             <div class="star-qa-reasoning-content">${renderMarkdown(chainParts.join('\n\n'))}</div>
@@ -803,15 +947,25 @@ function renderMarkdown(text) {
         return `\u0000IC${idx}\u0000`;
     });
 
-    // 3. HTML 转义（排除占位符）
-    html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // 3. HTML 转义（排除占位符）。引号同样要转义：链接 URL 会进入 href 属性，
+    // 不转义 `"` 就能提前闭合属性并注入事件处理器。
+    html = html
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 
     // 4. 粗体 **text** 和斜体 *text*
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
-    // 5. 链接 [text](url)
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // 5. 链接 [text](url)：协议白名单，避免模型输出/错误响应体注入 javascript: 链接
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, text, url) => {
+        const decoded = url.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        if (!isSafeLinkUrl(decoded)) return text;
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    });
 
     // 6. 按行处理：标题、列表、引用、水平线
     const lines = html.split('\n');
@@ -821,7 +975,7 @@ function renderMarkdown(text) {
     let inBlockquote = false;
 
     for (let i = 0; i < lines.length; i++) {
-        let line = lines[i];
+        const line = lines[i];
         const trimmed = line.trim();
 
         // 标题
@@ -935,7 +1089,7 @@ export function applyQATheme() {
     if (modal) {
         const container = modal.querySelector(`.${QA_CONTAINER_CLASS}`);
         if (container) {
-            const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
+            const savedTheme = getSetting('theme');
             if (savedTheme === 'dark') {
                 container.setAttribute('data-star-theme', 'dark');
             } else {
@@ -949,6 +1103,8 @@ export function applyQATheme() {
  * 清空对话（供外部调用）。
  */
 export function resetQAChat() {
+    // 清空对话前先中止在途流：否则流结束后仍会往刚重置的历史里 push 半截回复
+    stopStreaming();
     resetConversation();
     const modal = document.getElementById(QA_MODAL_ID);
     if (modal) {
@@ -965,25 +1121,20 @@ export function resetQAChat() {
 // =================================================================
 
 /**
- * HTML 转义辅助函数。
- */
-function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/**
  * 显示 AI 答疑 API 配置弹窗。
  * 设置修改后自动保存（防抖），无需手动点击"保存设置"。
  */
 export function showQASettingsPopup() {
     const existing = document.getElementById('star-qa-settings-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        // 必须走完整清理（摘掉 resize / Esc 监听），直接 remove 会永久泄漏监听器
+        if (typeof existing._starClose === 'function') existing._starClose();
+        else existing.remove();
+    }
 
-    const settings = extension_settings[PLUGIN_NAME];
-    const currentEndpoint = settings.qaApiEndpoint || '';
-    const currentKey = settings.qaApiKey || '';
-    const currentModel = settings.qaModel || 'gpt-3.5-turbo';
+    const currentEndpoint = getSetting('qaApiEndpoint');
+    const currentKey = getSetting('qaApiKey');
+    const currentModel = getSetting('qaModel');
 
     const overlay = document.createElement('div');
     overlay.id = 'star-qa-settings-overlay';
@@ -1004,7 +1155,7 @@ export function showQASettingsPopup() {
                 <p>配置 OpenAI 兼容的 API 接口，启用内置的 <strong>Star 小助手</strong> 来解答插件使用问题。</p>
                 <p>支持任何兼容 OpenAI Chat Completions 格式的 API（如 OpenAI、硅基流动、DeepSeek、Ollama 等）。</p>
                 <hr>
-                <p><strong>注意：</strong>API 密钥仅存储在本地浏览器中，不会上传到任何第三方服务器。</p>
+                <p><strong>注意：</strong>API 地址与密钥保存在<b>本机 SillyTavern 的服务器端设置文件</b>（settings.json，明文），不会发送给插件作者或任何第三方；请求只会发往你自己填写的 API 地址。</p>
                 <p><strong>提示：</strong>修改以下设置后会自动保存，无需手动点击保存按钮。</p>
             </div>
             <div class="star-qa-settings-field">
@@ -1051,10 +1202,23 @@ export function showQASettingsPopup() {
     window.addEventListener('resize', centerDialog);
 
     const closeOverlay = () => {
+        document.removeEventListener('keydown', handleSettingsEsc, true);
         window.removeEventListener('resize', centerDialog);
+        overlay._starClose = null;
         overlay.style.setProperty('opacity', '0', 'important');
         setTimeout(() => overlay.remove(), 300);
     };
+
+    // 设置浮层是独立于答疑面板的一层：Esc 必须只关它自己（capture 阶段截停，
+    // 避免同一次 Esc 继续触发答疑面板/收藏面板的处理器）。ui/main.js 的 Esc 白名单
+    // 也登记了本浮层，保证主面板不会抢先关闭。
+    const handleSettingsEsc = (e) => {
+        if (e.key !== 'Escape') return;
+        e.stopPropagation();
+        closeOverlay();
+    };
+    document.addEventListener('keydown', handleSettingsEsc, true);
+    overlay._starClose = closeOverlay;
 
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) closeOverlay();
@@ -1084,10 +1248,9 @@ export function showQASettingsPopup() {
     const scheduleSave = () => {
         clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
-            settings.qaApiEndpoint = endpointEl.value.trim();
-            settings.qaApiKey = keyEl.value.trim();
-            settings.qaModel = modelEl.value.trim() || 'gpt-3.5-turbo';
-            saveSettingsDebounced();
+            setSetting('qaApiEndpoint', endpointEl.value.trim());
+            setSetting('qaApiKey', keyEl.value.trim());
+            setSetting('qaModel', modelEl.value.trim() || 'gpt-3.5-turbo');
             Logger.debug('AI答疑设置已自动保存');
             showSavedTip();
         }, 500);

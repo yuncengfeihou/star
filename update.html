@@ -2,27 +2,35 @@
   <div class="star-update-head">
     <div class="star-update-version-line">
       <span class="star-update-dot"></span>
-      v2.2.0
+      v2.3.2
     </div>
-    <p class="star-update-sub">收藏插件最近更新了以下内容：</p>
+    <p class="star-update-sub">这次是一次以「数据安全 + 边界情况」为主的修复：</p>
   </div>
 
   <div class="star-update-section">
-    <div class="star-update-label">体验优化</div>
+    <div class="star-update-label">收藏数据</div>
     <ul class="star-update-list">
-      <li>分页组件重做，<b>双击页码可输入跳转</b></li>
-      <li>每页收藏数默认改为 10 条，可在设置里调整</li>
-      <li>暗色主题下，上下文查看的用户气泡改成紫色，更好分辨</li>
-      <li>缓存逻辑修了，不再偶尔弹「该收藏不存在」</li>
-      <li>预览模式的图标在暗色主题下不会滚没了</li>
+      <li>收藏后 <b>立刻点开同一个聊天</b>（防抖窗口内重载）不会再丢收藏</li>
+      <li>多 swipe 卡片改完备注/标签后，不再跳回第 1 个 swipe</li>
+      <li>切换聊天/角色时自动清除标签筛选，不再出现「明明有收藏却显示为空」</li>
     </ul>
   </div>
 
   <div class="star-update-section">
-    <div class="star-update-label">修了俩 bug</div>
+    <div class="star-update-label">安全与弹窗</div>
     <ul class="star-update-list">
-      <li>设置里的「上下文数量」改了不生效，现在好了</li>
-      <li>设置页开着的时候按 Esc 会把整个收藏面板关了，现在只关设置页</li>
+      <li>AI 答疑与更新日志里的链接只允许 http/https/mailto，<b>不再能执行脚本或注入属性</b></li>
+      <li>答疑设置浮层、图片预览按 <b>Esc</b> 只关自己一层，不再连带关掉整个面板</li>
+      <li>调试面板关闭后残留状态不会让收藏面板的 Esc 失效</li>
+    </ul>
+  </div>
+
+  <div class="star-update-section">
+    <div class="star-update-label">截图与缓存</div>
+    <ul class="star-update-list">
+      <li>截图弹窗声明几条就截几条；消息在弹窗期间消失会明确提示并按实际楼层命名</li>
+      <li>超长拼接图自动等比缩小，不再生成空白/截断图片</li>
+      <li>清空字体缓存会同时清掉 Font Awesome 的内存缓存</li>
     </ul>
   </div>
 </div>

@@ -1,11 +1,12 @@
 // ui/character-switcher.js - 跨角色收藏切换器（底部弹出抽屉）
 // 设计：扫描所有角色/群组，列出「有收藏的角色」，点击即切换收藏面板至该角色的数据。
 
-import { state, PLUGIN_NAME } from '../state.js';
-import { getContext, extension_settings } from '../../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../../script.js';
+import { state, getSetting, setSetting } from '../state.js';
+import { getContext } from '../../../../extensions.js';
 import Logger from '../Logger.js';
-import { scanAllCharactersForFavorites, isAbortError } from '../api.js';
+import { scanAllCharactersForFavorites } from '../scan.js';
+import { escapeHtml, isAbortError } from '../utils.js';
+import { registerCanceller } from '../hooks.js';
 
 const SWITCHER_ID = 'star-character-switcher';
 
@@ -28,9 +29,6 @@ let scanController = null;
 // 后台预加载取消控制器（收藏面板打开时启动，关闭时 abort）
 let preloadController = null;
 
-function escapeHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
-}
 
 // =================================================================
 //        置顶功能：角色唯一标识 + 置顶列表读写
@@ -56,10 +54,10 @@ function getCurrentCharacterKey() {
 }
 
 /**
- * 已置顶的角色标识列表（持久化在 extension_settings，严禁使用 localStorage）。
+ * 已置顶的角色标识列表（通过 state.js 的 setSetting 持久化）。
  */
 function getPinnedKeys() {
-    const list = extension_settings[PLUGIN_NAME]?.pinnedCharacters;
+    const list = getSetting('pinnedCharacters');
     return Array.isArray(list) ? list : [];
 }
 
@@ -71,8 +69,7 @@ function togglePinKey(key) {
     const idx = list.indexOf(key);
     if (idx >= 0) list.splice(idx, 1);
     else list.push(key);
-    extension_settings[PLUGIN_NAME].pinnedCharacters = list;
-    saveSettingsDebounced();
+    setSetting('pinnedCharacters', list);
 }
 
 /**
@@ -302,7 +299,6 @@ async function startScan(frame) {
     scanController = controller;
     state.isScanningCharacters = true;
 
-    const listEl = frame.querySelector('.star-cs-list');
     // 不清空列表：缓存过期但已有旧数据时，旧列表保留可见，扫描完成后整体替换。
     // （切换器每次打开都会新建 frame，列表初始即为空，无残留风险。）
     updateStatus(frame, '正在准备扫描…');
@@ -439,8 +435,14 @@ export function invalidateCharactersCache() {
 export function closeCharacterSwitcher() {
     const frame = document.getElementById(SWITCHER_ID);
     if (!frame) return;
-    // 取消进行中的扫描
-    if (scanController) { scanController.abort(); scanController = null; }
+    // 取消进行中的扫描。scanController 置空后，startScan 的 finally 不再重置
+    // isScanningCharacters，这里必须自行复位，否则「扫描中关闭」会让该标志永久为 true，
+    // 后续后台预加载被一直跳过。
+    if (scanController) {
+        scanController.abort();
+        scanController = null;
+        state.isScanningCharacters = false;
+    }
     // 移除 ESC 监听
     if (frame._starEscHandler) {
         document.removeEventListener('keydown', frame._starEscHandler, true);
@@ -452,3 +454,7 @@ export function closeCharacterSwitcher() {
     frame.classList.remove('visible');
     setTimeout(() => frame.remove(), 300);
 }
+
+// 切换聊天时取消进行中的预加载/扫描：入口层（bootstrap/chat-events.js）通过 hooks.js 的
+// 注册中心统一调用，无需让数据层反向 import 本模块。
+registerCanceller(() => abortPreload());

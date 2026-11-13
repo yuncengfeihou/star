@@ -1,16 +1,34 @@
-// ui/main.js - 核心面板渲染与主逻辑
+// ui/main.js - 收藏面板（模态框）渲染与主逻辑
+//
+// 本模块及其依赖（预览/设置/截图/字体子集化/角色切换器）由 ui/modal-gateway.js 按需加载：
+// 用户第一次打开收藏面板时才解析这些代码，插件启动不会付出这个代价。
+// 加载完成后，本模块向 hooks.js 注册跨层钩子：
+//   - core 的保存前钩子（中断后台预加载）与视图刷新钩子
+//   - 入口层切换聊天时调用的后台任务取消
 
-import { getContext, extension_settings } from '../../../../extensions.js';
-import { saveSettingsDebounced, chat, messageFormatting } from '../../../../../script.js';
+import { getContext } from '../../../../extensions.js';
+import { messageFormatting } from '../../../../../script.js';
 import { timestampToMoment } from '../../../../utils.js';
-import { state, PLUGIN_NAME } from '../state.js';
-import { getAllChatFavoritesForCurrentContext, getFullChatData, isAbortError } from '../api.js';
-import { ensureFavoritesArrayExists, ensureCurrentChatIsCached } from '../core.js';
-import { applySavedTheme, showAvatarLongPressMenu, closeAvatarLongPressMenu, toggleTheme } from './settings.js';
-import { openCharacterSwitcher, closeCharacterSwitcher, preloadCharacterFavorites, abortPreload } from './character-switcher.js';
-import { handleViewContext, closeContextFrame } from './preview.js';
+import { state, findChatData } from '../state.js';
+import { escapeHtml, stripJsonlExt, isAbortError, buildHighlightRegex } from '../utils.js';
+import { getAllChatFavoritesForCurrentContext, getFullChatData } from '../chat-data.js';
+import { shouldShowUpdateNotice, showUpdateNoticeDialog } from '../update.js';
+import {
+    ensureFavoritesArrayExists,
+    handleEditNote,
+    handleEditTags,
+    handleDeleteFavoriteFromPopup,
+    handleEditMessageContent,
+} from '../core.js';
+import { setCoreHooks, registerCanceller } from '../hooks.js';
+import { showAvatarLongPressMenu, closeAvatarLongPressMenu } from './settings.js';
+import { applySavedTheme, isDarkTheme, toggleThemeAnimated, THEME_CHANGED_EVENT } from './theme.js';
+import { openCharacterSwitcher, preloadCharacterFavorites, abortPreload } from './character-switcher.js';
+import { handleViewContext, closeContextFrame, enterPreviewMode } from './preview.js';
+import { renderIframesInElement } from './iframes.js';
+import { showInputModal } from './components.js';
+import { registerFavoritesModal } from './modal-gateway.js';
 import Logger from '../Logger.js';
-import { shouldShowUpdateNotice, showUpdateNoticeDialog } from '../api.js';
 
 // =================================================================
 //                         CONSTANTS
@@ -28,23 +46,74 @@ const SEARCH_CONTAINER_CLASS = 'favorites-search-container';
 const SEARCH_ICON_CLASS = 'favorites-search-icon';
 const SEARCH_INPUT_CLASS = 'favorites-search-input';
 const SEARCH_FILTER_CLASS = 'favorites-search-filter';
-const PREVIEW_EXIT_BUTTON_ID = 'favorites-preview-exit-button';
+
+const LONG_PRESS_MS = 600;      // 长按判定（与聊天区收藏图标保持一致）
+const SEARCH_DEBOUNCE_MS = 150; // 搜索输入防抖
+// 列表入场动画时长（阶梯延迟 140ms 封顶 + 单卡时长 220ms，留一点余量）
+const LIST_ENTER_TOTAL_MS = 420;
 
 const favDoc = document;
 
-/**
- * HTML 转义：用户可控文本（备注、发送者名等）插入 HTML 前必须转义，防止自 XSS。
- */
-function escapeHtml(str) {
-    return String(str == null ? '' : str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
 // 后台批量加载收藏数据的取消控制器（切换聊天/重开面板时用来中断进行中的请求）
 let backgroundLoadController = null;
+
+// 上一次播放过入场动画的聊天文件：只有「换了一个聊天视图」才重播列表入场
+let lastEnteredChatFile = null;
+let listEnterTimer = null;
+
+// =================================================================
+//                         LOADING PLACEHOLDERS
+// =================================================================
+
+/**
+ * 加载占位（骨架屏）的统一标记类。
+ * 渲染开始时必须整体清除：面板是「往 modalBodyElement 里 prepend/append」而非重建，
+ * 残留的占位块会挤占布局（历史上裸用 .spinner 就是靠这里显式 remove 兜住的）。
+ */
+const LOADING_PLACEHOLDER_CLASS = 'star-loading-placeholder';
+
+/**
+ * 收藏卡片骨架屏：与真实卡片同尺寸，加载完成时内容不会「跳一下」。
+ */
+function buildMainPanelSkeleton(count = 3) {
+    const card = `
+        <div class="star-skeleton-card">
+            <div class="star-skeleton star-skeleton-line star-skeleton-head"></div>
+            <div class="star-skeleton star-skeleton-line"></div>
+            <div class="star-skeleton star-skeleton-line star-skeleton-body"></div>
+        </div>`;
+    return card.repeat(count);
+}
+
+/**
+ * 侧栏聊天列表骨架屏。
+ */
+function buildChatListSkeleton(count = 4) {
+    return `<div class="star-skeleton star-skeleton-row"></div>`.repeat(count);
+}
+
+/**
+ * 显示加载骨架（会先清掉上一块占位）。
+ */
+function showLoadingPlaceholder(html) {
+    if (!state.modalBodyElement) return;
+    clearLoadingPlaceholder();
+    const holder = favDoc.createElement('div');
+    holder.className = LOADING_PLACEHOLDER_CLASS;
+    holder.setAttribute('aria-hidden', 'true'); // 纯装饰，读屏交给 aria-busy
+    holder.innerHTML = html;
+    state.modalBodyElement.appendChild(holder);
+}
+
+/**
+ * 清除加载骨架（含早期版本遗留的裸 .spinner）。
+ */
+function clearLoadingPlaceholder() {
+    if (!state.modalBodyElement) return;
+    state.modalBodyElement
+        .querySelectorAll(`.${LOADING_PLACEHOLDER_CLASS}, .spinner`)
+        .forEach(el => el.remove());
+}
 
 // =================================================================
 //                      UI MODAL FUNCTIONS
@@ -84,60 +153,63 @@ export function ensureModalStructure() {
     // --- Event Listeners ---
     state.modalElement.querySelector(`.${MODAL_CLOSE_X_CLASS}`).addEventListener('click', closeFavoritesModal);
 
+    // 主题变更订阅：切换动效要等快照就绪才真正应用主题，因此图标必须事件驱动，
+    // 不能在点击处同步判断。ensureModalStructure 有 state.modalElement 守卫，只会注册一次。
+    favDoc.addEventListener(THEME_CHANGED_EVENT, () => {
+        syncThemeButtonIcon(state.modalElement?.querySelector('.favorites-sidebar-theme-btn i'));
+    });
+
     // 右上角标签筛选按钮（点击展开标签下拉菜单）
     const tagBtn = state.modalElement.querySelector('.favorites-tag-btn');
     if (tagBtn) {
         tagBtn.addEventListener('click', toggleTagFilterMenu);
     }
 
-	// --- MODIFIED: Sidebar Toggle & Long-press Options Menu (with Touch Support) ---
-	const avatarToggle = state.modalElement.querySelector(`.${SIDEBAR_TOGGLE_CLASS}`);
-	let longPressTimer;
-	let isLongPressAction = false;
+    // --- 侧栏开关 + 长按/右键选项菜单（含触屏支持）---
+    const avatarToggle = state.modalElement.querySelector(`.${SIDEBAR_TOGGLE_CLASS}`);
+    let longPressTimer;
+    let isLongPressAction = false;
 
-	// 启动长按计时器 (不阻止默认事件)
-	const startPress = (e) => {
-		isLongPressAction = false;
-		longPressTimer = setTimeout(() => {
-			isLongPressAction = true; // 标记为长按已触发
-			showAvatarLongPressMenu();
-		}, 600); // 600ms for long press
-	};
+    // 启动长按计时器（不阻止默认事件）
+    const startPress = () => {
+        isLongPressAction = false;
+        longPressTimer = setTimeout(() => {
+            isLongPressAction = true; // 标记为长按已触发
+            showAvatarLongPressMenu();
+        }, LONG_PRESS_MS);
+    };
 
-	// 清除长按计时器
-	const endPress = () => {
-		clearTimeout(longPressTimer);
-	};
+    // 清除长按计时器
+    const endPress = () => {
+        clearTimeout(longPressTimer);
+    };
 
-	// 1. 绑定启动事件 (鼠标按下 或 手指触摸)
-	avatarToggle.addEventListener('mousedown', startPress);
-	avatarToggle.addEventListener('touchstart', startPress);
+    // 1. 绑定启动事件（鼠标按下或手指触摸）
+    avatarToggle.addEventListener('mousedown', startPress);
+    avatarToggle.addEventListener('touchstart', startPress);
 
-	// 2. 绑定结束/取消事件 (鼠标抬起、移开 或 手指离开、取消)
-	avatarToggle.addEventListener('mouseup', endPress);
-	avatarToggle.addEventListener('mouseleave', endPress);
-	avatarToggle.addEventListener('touchend', endPress);
-	avatarToggle.addEventListener('touchcancel', endPress);
+    // 2. 绑定结束/取消事件（鼠标抬起/移开、手指离开/取消）
+    avatarToggle.addEventListener('mouseup', endPress);
+    avatarToggle.addEventListener('mouseleave', endPress);
+    avatarToggle.addEventListener('touchend', endPress);
+    avatarToggle.addEventListener('touchcancel', endPress);
 
-	// 3. 绑定单击事件，并在这里做最终判断
-	avatarToggle.addEventListener('click', (e) => {
-		// 如果是长按动作触发的，则阻止单击行为
-		if (isLongPressAction) {
-			e.preventDefault();
-			e.stopPropagation();
-			return;
-		}
-		// 否则，执行单击行为：切换侧边栏
-		state.modalDialogElement.classList.toggle('sidebar-closed');
-	});
-	// 2. 为"长按"或"右键单击"设置监听器 (用于弹出选项菜单)
-	avatarToggle.addEventListener('contextmenu', (e) => {
-		// 阻止浏览器的默认上下文菜单 (如 "保存图片...")
-		e.preventDefault();
+    // 3. 单击：已由长按触发时阻止单击行为，否则切换侧边栏
+    avatarToggle.addEventListener('click', (e) => {
+        if (isLongPressAction) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        state.modalDialogElement.classList.toggle('sidebar-closed');
+    });
 
-		// 显示我们自定义的选项菜单
-		showAvatarLongPressMenu();
-	});
+    // 4. 长按/右键单击：弹出选项菜单
+    avatarToggle.addEventListener('contextmenu', (e) => {
+        // 阻止浏览器默认上下文菜单（如“保存图片...”）
+        e.preventDefault();
+        showAvatarLongPressMenu();
+    });
 
     const searchContainer = state.modalElement.querySelector(`.${SEARCH_CONTAINER_CLASS}`);
     const searchIcon = state.modalElement.querySelector(`.${SEARCH_ICON_CLASS}`);
@@ -173,7 +245,7 @@ export function ensureModalStructure() {
     searchInput.addEventListener('input', (e) => {
         const query = e.target.value.toLowerCase();
         clearTimeout(searchDebounceTimer);
-        searchDebounceTimer = setTimeout(() => handleSearchInModal(query), 150);
+        searchDebounceTimer = setTimeout(() => handleSearchInModal(query), SEARCH_DEBOUNCE_MS);
     });
 
     state.modalElement.addEventListener('click', (e) => {
@@ -190,9 +262,8 @@ export function ensureModalStructure() {
  * 搜索结果渲染时调用：正文是 messageFormatting 后的 HTML，备注是纯文本，二者都能安全处理。
  */
 function highlightInHtml(html, query) {
-    if (!query) return html;
-    const escapedQuery = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!escapedQuery) return html;
+    const regex = buildHighlightRegex(query);
+    if (!regex) return html;
 
     // 先把 HTML 标签整体占位，避免高亮正则误伤标签名/属性中的文本
     const tagStack = [];
@@ -200,7 +271,7 @@ function highlightInHtml(html, query) {
         tagStack.push(m);
         return `\u0000T${tagStack.length - 1}\u0000`;
     });
-    const highlighted = protectedHtml.replace(new RegExp(`(${escapedQuery})`, 'gi'), '<mark class="star-search-mark">$1</mark>');
+    const highlighted = protectedHtml.replace(regex, '<mark class="star-search-mark">$1</mark>');
     return highlighted.replace(/\u0000T(\d+)\u0000/g, (_, i) => tagStack[parseInt(i, 10)]);
 }
 
@@ -247,6 +318,10 @@ function updateTagBtnState() {
 // 标签下拉菜单的点击外部关闭处理器（模块级，供 closeTagFilterMenu 移除）
 let _tagMenuOutsideHandler = null;
 
+// 标签筛选前的「每张卡片在看第几个 swipe」快照：筛选期间索引会被临时改写，
+// 清除筛选时按它还原（Map<favItem, index>）。仅存内存引用，不落库。
+let _tagFilterSwipeSnapshot = null;
+
 /**
  * 关闭标签筛选下拉菜单并清理事件监听。
  */
@@ -270,7 +345,7 @@ function toggleTagFilterMenu() {
         return;
     }
 
-    const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === String(state.currentViewingChatFile || '').replace('.jsonl', ''));
+    const chatData = findChatData(state.currentViewingChatFile);
     const tagBtn = state.modalElement?.querySelector('.favorites-tag-btn');
     if (!tagBtn) return;
     const tags = collectTags(chatData);
@@ -308,7 +383,27 @@ function toggleTagFilterMenu() {
     menu.querySelector('.star-tag-filter-list').addEventListener('click', async (e) => {
         const item = e.target.closest('.star-tag-filter-item');
         if (!item) return;
-        state.activeTagFilter = item.dataset.tag === '__all__' ? null : item.dataset.tag;
+        const nextFilter = item.dataset.tag === '__all__' ? null : item.dataset.tag;
+        const favorites = findChatData(state.currentViewingChatFile)?.favorites || [];
+
+        if (nextFilter) {
+            // 进入筛选：先把每张卡片「原来在看第几个 swipe」存起来，筛选期间再切到
+            // 真正带该标签的那个 swipe（否则卡片显示的仍是旧 swipe，内容与筛选条件对不上）。
+            // 存快照是为了「全部收藏」时能原样还原——索引只在筛选期间临时借用。
+            _tagFilterSwipeSnapshot = new Map(favorites.map(fav => [fav, fav.currentSwipeViewIndex || 0]));
+            for (const fav of favorites) {
+                const idx = (fav.favoritedSwipes || []).findIndex(s => Array.isArray(s.tags) && s.tags.includes(nextFilter));
+                if (idx >= 0) fav.currentSwipeViewIndex = idx;
+            }
+        } else if (_tagFilterSwipeSnapshot) {
+            // 清除筛选：还原每条收藏原本查看的 swipe（保留用户最后看的位置）
+            for (const [fav, idx] of _tagFilterSwipeSnapshot) {
+                if ((fav.favoritedSwipes || []).length > 0) fav.currentSwipeViewIndex = idx;
+            }
+            _tagFilterSwipeSnapshot = null;
+        }
+
+        state.activeTagFilter = nextFilter;
         closeTagFilterMenu();
         updateTagBtnState();
         state.currentPage = 1;
@@ -341,7 +436,7 @@ export async function handleSearchInModal(query) {
     }
 
     // 从缓存的全量收藏数据中跨页匹配（先应用标签筛选，再按关键词过滤）
-    const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === String(state.currentViewingChatFile || '').replace('.jsonl', ''));
+    const chatData = findChatData(state.currentViewingChatFile);
     const allFavorites = getFilteredFavorites(chatData);
     const messages = chatData?.messages || [];
 
@@ -350,9 +445,11 @@ export async function handleSearchInModal(query) {
         if (filterByNote) {
             return noteText.includes(query);
         }
-        // 匹配备注 + 当前收藏 swipe 的正文
+        // 匹配备注 + 卡片当前显示的 swipe 的正文。
+        // 必须用 currentSwipeViewIndex 对应的 swipe：卡片渲染走的也是它，
+        // 固定取 favoritedSwipes[0] 会让「屏幕上正显示的那段文字」搜不到（多 swipe 场景）。
         const msg = messages[parseInt(fav.messageId, 10)];
-        const activeSwipe = fav.favoritedSwipes?.[0];
+        const activeSwipe = fav.favoritedSwipes?.[fav.currentSwipeViewIndex] ?? fav.favoritedSwipes?.[0];
         let msgText = '';
         if (msg) {
             msgText = (activeSwipe && msg.swipes && msg.swipes[activeSwipe.swipeId] !== undefined) ? msg.swipes[activeSwipe.swipeId] : (msg.mes || '');
@@ -402,19 +499,6 @@ async function renderSearchResults(results, chatData, highlightQuery = '') {
 }
 
 /**
- * Centers the modal in the viewport.
- */
-export function centerModal() {
-    if (!state.modalDialogElement) return;
-    const windowWidth = window.innerWidth;
-    const windowHeight = window.innerHeight;
-    const dialogWidth = state.modalDialogElement.offsetWidth;
-    const dialogHeight = state.modalDialogElement.offsetHeight;
-    state.modalDialogElement.style.left = `${Math.max(0, (windowWidth - dialogWidth) / 2)}px`;
-    state.modalDialogElement.style.top = `${Math.max(0, (windowHeight - dialogHeight) / 2)}px`;
-}
-
-/**
  * Opens the favorites modal.
  */
 export async function openFavoritesModal() {
@@ -453,7 +537,7 @@ export async function openFavoritesModal() {
         await renderFavoritesView(state.currentViewingChatFile);
     } else {
         // --- PERFORMANCE OPTIMIZATION ---
-        // 1. Reset state and show a spinner
+        // 1. Reset state and show a skeleton
         // 先取消上一次后台加载，防止其 resolve 后把旧角色的收藏写入已重置的数组
         abortBackgroundLoad();
         state.currentPage = 1;
@@ -461,7 +545,9 @@ export async function openFavoritesModal() {
         state.allChatsFavoritesData = [];
         state.isLoadingOtherChats = false;
         state.activeTagFilter = null;
-        state.modalBodyElement.innerHTML = '<div class="spinner"></div>';
+        // 数据被整体重置，标签筛选的 swipe 快照随之失效（否则会还原到已废弃的收藏对象上）
+        _tagFilterSwipeSnapshot = null;
+        showLoadingPlaceholder(buildMainPanelSkeleton());
 
         // Reset UI elements
         state.modalDialogElement.classList.add('sidebar-closed');
@@ -477,18 +563,17 @@ export async function openFavoritesModal() {
         loadOtherChatsInBackground();
     }
 
-    // 数据就绪后居中并显示（使用 visibility 代替 display:none，无需回流/rAF 黑科技即可平滑渐显）
-    centerModal();
+    // 数据就绪后显示（使用 visibility 代替 display:none，无需回流/rAF 黑科技即可平滑渐显）。
+    // 位置与尺寸完全由 CSS 决定（遮罩 flex 居中），视口变化不需要任何脚本参与。
     state.modalElement.classList.add('visible');
     state.modalDialogElement.classList.add('visible');
 
-    window.addEventListener('resize', centerModal);
     // capture 阶段监听：子弹窗（如 AI 答疑，其 Esc 监听在插件初始化时注册，早于本监听）
     // 会先于本处理器把自己关闭；若在冒泡阶段判断，会因弹窗已不可见而误关主面板。
     favDoc.addEventListener('keydown', handleEscKey, true);
 
     // 后台静默预加载角色收藏数据，让「切换角色」秒开
-    preloadCharacterFavorites().catch(() => {});
+    preloadCharacterFavorites().catch(e => Logger.debug('后台预加载角色收藏失败（不影响面板使用）:', e));
 }
 
 /**
@@ -499,7 +584,7 @@ export function closeFavoritesModal() {
 
     // 若 AI 答疑处于最小化状态（存在浮动恢复按钮），随主弹窗一并彻底关闭（中止流式、移除恢复按钮）
     if (document.getElementById('star-qa-restore-btn')) {
-        import('./qa.js').then(m => m.closeQAPanel());
+        import('./qa.js').then(m => m.closeQAPanel()).catch(e => Logger.debug('关闭 AI 答疑面板失败:', e));
     }
 
     if (state.modalElement) {
@@ -525,8 +610,12 @@ export function closeFavoritesModal() {
     // 关闭可能残留的标签筛选下拉菜单
     closeTagFilterMenu();
 
+    // 关闭设置小菜单：它是独立的 position:fixed 全屏遮罩（z-index 比收藏面板更高），
+    // 只关面板会把它留在页面上——用户看到的是一层去不掉的模糊遮罩 + 设置对话框，
+    // 且主遮罩的 backdrop-filter 与 window.resize 监听都要靠它恢复/摘除。
+    closeAvatarLongPressMenu();
+
     // Clean up event listeners
-    window.removeEventListener('resize', centerModal);
     favDoc.removeEventListener('keydown', handleEscKey, true);
 }
 
@@ -551,10 +640,14 @@ export async function handleEscKey(event) {
         'star-screenshot-popup',     // 截图选择弹窗（临时创建）
         'star-guide-dialog',         // 使用指南（临时创建）
         'star-character-switcher',   // 角色切换器（临时创建，自身 capture 监听处理）
+        'star-qa-settings-overlay',  // AI 答疑设置浮层（自身捕获 Esc 关闭）
+        'star-img-preview-overlay',  // 截图设置里的图片预览（自身监听 Esc）
     ];
     const persistentCheck = [
         ['star-qa-modal', el => el.style.display !== 'none'],
-        ['star-debug-modal', el => el.classList.contains('visible')],
+        // 按实际可见性判断，而不是 class：关闭动画/隐藏后残留的 visible 类
+        // 曾让这里误判「调试面板还开着」，导致主面板的 Esc 永久失效。
+        ['star-debug-modal', el => el.style.display !== 'none'],
         ['star-editor-frame', el => el.classList.contains('visible')],
     ];
     const subModalOpen = TEMP_MODALS.some(id => document.getElementById(id))
@@ -617,8 +710,16 @@ export async function renderFavoritesView(selectedChatFileName = null) {
     closeTagFilterMenu();
 
     const context = getContext();
-    const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
-    const selectedChatFileNameNoExt = selectedChatFileName ? String(selectedChatFileName).replace('.jsonl', '') : null;
+    const currentChatFile = stripJsonlExt(context.chatId || '');
+    const selectedChatFileNameNoExt = selectedChatFileName ? stripJsonlExt(selectedChatFileName) : null;
+
+    // 切换到另一个聊天的收藏视图时清除标签筛选：标签属于上一个聊天的语境，
+    // 残留会让新聊天明明有收藏却显示空列表。写操作后的「同视图刷新」不受影响。
+    if (selectedChatFileNameNoExt && selectedChatFileNameNoExt !== state.currentViewingChatFile) {
+        state.activeTagFilter = null;
+        _tagFilterSwipeSnapshot = null;
+        updateTagBtnState();
+    }
 
     // --- OPTIMIZATION: Initial Load Logic ---
     if (state.allChatsFavoritesData.length === 0) {
@@ -630,8 +731,8 @@ export async function renderFavoritesView(selectedChatFileName = null) {
         const currentChatMessages = context.chat || [];
 
         const initialData = {
-            fileName: currentContextChatIdNoExt,
-            displayName: currentContextChatIdNoExt,
+            fileName: currentChatFile,
+            displayName: currentChatFile,
             metadata: currentChatMetadata,
             favorites: currentChatMetadata.favorites || [],
             messages: currentChatMessages,
@@ -641,19 +742,19 @@ export async function renderFavoritesView(selectedChatFileName = null) {
         };
         state.allChatsFavoritesData.push(initialData);
 
-        state.currentViewingChatFile = currentContextChatIdNoExt;
+        state.currentViewingChatFile = currentChatFile;
     } else if (selectedChatFileNameNoExt) {
         state.currentViewingChatFile = selectedChatFileNameNoExt;
     } else {
         // Fallback if something went wrong
-        state.currentViewingChatFile = currentContextChatIdNoExt;
+        state.currentViewingChatFile = currentChatFile;
     }
 
-    let viewingChatData = state.allChatsFavoritesData.find(chatData => String(chatData.fileName).replace('.jsonl', '') === state.currentViewingChatFile);
+    let viewingChatData = findChatData(state.currentViewingChatFile);
 
     // If we clicked a chat that hasn't been loaded by the background task yet
     if (!viewingChatData && !state.isLoadingOtherChats) {
-        state.modalBodyElement.innerHTML = '<div class="spinner"></div>';
+        showLoadingPlaceholder(buildMainPanelSkeleton());
         const fullChatData = await getFullChatData(context.characterId, context.groupId, state.currentViewingChatFile, !!context.groupId);
         if(fullChatData) {
             viewingChatData = {
@@ -667,7 +768,8 @@ export async function renderFavoritesView(selectedChatFileName = null) {
             state.allChatsFavoritesData.push(viewingChatData);
         }
     } else if (!viewingChatData) {
-        state.modalBodyElement.innerHTML = `<div class="favorites-empty">聊天收藏正在加载中...</div>`;
+        // 该聊天仍在后台加载中：用卡片骨架占位，而不是一行「加载中...」文本
+        showLoadingPlaceholder(buildMainPanelSkeleton());
         return;
     }
 
@@ -676,17 +778,38 @@ export async function renderFavoritesView(selectedChatFileName = null) {
         : (context.characters[viewingChatData.characterId]?.name || context.name2);
     state.modalTitleElement.textContent = roleName || '收藏管理';
 
-    const favoritesArray = viewingChatData.metadata?.favorites || [];
-    const totalFavorites = favoritesArray.length;
 
-    // 清理加载指示器：openFavoritesModal / 「聊天未缓存」分支 / switchToCharacter 设置的 spinner，
+    // 清理加载骨架：openFavoritesModal / 「聊天未缓存」分支 / switchToCharacter 设置的占位，
     // 渲染完成前必须移除，否则会残留为空占位块挤占布局
-    const staleSpinner = state.modalBodyElement.querySelector('.spinner');
-    if (staleSpinner) staleSpinner.remove();
+    clearLoadingPlaceholder();
 
     // --- Render sidebar and main content ---
     renderChatListPanel(); // Update the chat list panel separately
     await renderMainPanel(viewingChatData); // Render the main favorites content
+}
+
+/**
+ * 同步侧栏主题按钮的图标（太阳/月亮）并播放一次「弹入 + 旋转」。
+ *
+ * 必须是幂等的：主题变更事件在「打开面板回填主题」时也会触发，
+ * 若此时图标已正确就什么都不做，避免面板刚打开就莫名播放动画。
+ * @param {Element|null} icon - 主题按钮内的 <i> 元素，不存在时静默返回
+ */
+function syncThemeButtonIcon(icon) {
+    if (!icon) return;
+
+    const isDark = isDarkTheme();
+    const wanted = isDark ? 'fa-moon' : 'fa-sun';
+    const other = isDark ? 'fa-sun' : 'fa-moon';
+    if (icon.classList.contains(wanted)) return;
+
+    icon.classList.remove(other);
+    icon.classList.add(wanted);
+
+    // 重放动画：先摘类并强制回流，否则连续切换时第二次不会重新播放
+    icon.classList.remove('star-theme-icon-pop');
+    void icon.offsetWidth;
+    icon.classList.add('star-theme-icon-pop');
 }
 
 /**
@@ -712,32 +835,31 @@ export function renderChatListPanel() {
         state.modalBodyElement.prepend(panel);
     }
 
-    const context = getContext();
-    const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
+    const currentChatFile = stripJsonlExt(getContext().chatId || '');
 
     // 侧栏底部主题图标：暗色主题显示月亮，亮色主题显示太阳
-    const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
-    const themeIcon = savedTheme === 'dark' ? 'fa-moon' : 'fa-sun';
+    const themeIcon = isDarkTheme() ? 'fa-moon' : 'fa-sun';
 
     const chatListItemsHtml = `
         <div class="favorites-chat-list-items">
             ${state.allChatsFavoritesData.map(chat => {
-                const fileNameNoExt = String(chat.fileName).replace('.jsonl', '');
+                const fileNameNoExt = stripJsonlExt(chat.fileName);
                 const favCount = chat.favorites?.length || 0;
                 // Show item if it has favorites, or if it's the current chat (even if empty)
-                if (favCount === 0 && fileNameNoExt !== currentContextChatIdNoExt) return '';
+                if (favCount === 0 && fileNameNoExt !== currentChatFile) return '';
 
                 const isSelected = fileNameNoExt === state.currentViewingChatFile;
+                // 聊天文件名由用户创建，插入 HTML/属性前必须转义
+                const chatLabel = escapeHtml(chat.displayName || fileNameNoExt);
                 return `
-                    <div class="favorites-chat-list-item ${isSelected ? 'active' : ''}" data-chat-file="${fileNameNoExt}">
-                        <div class="chat-list-item-name" title="${chat.displayName || fileNameNoExt}">
-                            ${chat.displayName || fileNameNoExt}
+                    <div class="favorites-chat-list-item ${isSelected ? 'active' : ''}" data-chat-file="${escapeHtml(fileNameNoExt)}">
+                        <div class="chat-list-item-name" title="${chatLabel}">
+                            ${chatLabel}
                         </div>
-                        <div class="chat-list-item-count">${favCount}</div>
                     </div>
                 `;
             }).join('')}
-            ${state.isLoadingOtherChats ? '<div class="chat-list-loader">加载中...</div>' : ''}
+            ${state.isLoadingOtherChats ? `<div class="chat-list-loader">${buildChatListSkeleton()}</div>` : ''}
         </div>
         <div class="favorites-sidebar-bottom">
             <div class="favorites-sidebar-char-switch-btn" title="切换角色（跨角色浏览收藏）">
@@ -773,8 +895,10 @@ export function renderChatListPanel() {
     if (themeBtn) {
         themeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            toggleTheme();
-            renderChatListPanel(); // 重新渲染以切换太阳/月亮图标
+            // 涟漪起点取按钮自身的「底边中点」，扩散方向即从侧栏左下角铺满整个界面。
+            // 图标不在此处更新：主题是等快照就绪后才应用的，这里同步读到的仍是旧主题，
+            // 交由 star:theme-changed 事件（见 ensureModalStructure）更新。
+            toggleThemeAnimated(e.currentTarget);
         });
     }
 
@@ -783,7 +907,7 @@ export function renderChatListPanel() {
     if (qaBtn) {
         qaBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            import('./qa.js').then(m => m.openQAPanel());
+            import('./qa.js').then(m => m.openQAPanel()).catch(err => Logger.error('打开 AI 答疑面板失败:', err));
         });
     }
 
@@ -848,6 +972,19 @@ export async function renderMainPanel(viewingChatData) {
 
     mainPanel.innerHTML = mainPanelHtml;
 
+    // 列表入场动画：仅在切换到「另一个聊天的收藏视图」时播放一次。
+    // 分页、切标签、收藏增删后的刷新都不重播——否则每翻一页整列都重放一次位移，
+    // 观感是「卡」而不是「顺」。定时器在动画结束后摘掉标记，避免同一视图的
+    // 后续渲染（innerHTML 已重建，标记仍在）误播。
+    if (state.currentViewingChatFile !== lastEnteredChatFile) {
+        lastEnteredChatFile = state.currentViewingChatFile;
+        mainPanel.classList.add('star-list-enter');
+        clearTimeout(listEnterTimer);
+        listEnterTimer = setTimeout(() => {
+            mainPanel.classList.remove('star-list-enter');
+        }, LIST_ENTER_TOTAL_MS);
+    }
+
     // Call the new pagination renderer
     if (totalFavorites > state.itemsPerPage) {
         renderPagination(state.currentPage, totalPages);
@@ -906,10 +1043,10 @@ export async function loadOtherChatsInBackground() {
 
         // Sort the final list
         const context = getContext();
-        const currentContextChatIdNoExt = String(context.chatId || '').replace('.jsonl', '');
+        const currentChatFile = stripJsonlExt(context.chatId || '');
         state.allChatsFavoritesData.sort((a, b) => {
-            if (a.fileName === currentContextChatIdNoExt) return -1;
-            if (b.fileName === currentContextChatIdNoExt) return 1;
+            if (a.fileName === currentChatFile) return -1;
+            if (b.fileName === currentChatFile) return 1;
             return a.fileName.localeCompare(b.fileName);
         });
 
@@ -1005,18 +1142,39 @@ async function loadRestChatsInBackground(restChats, charEntry, controller) {
     }
 }
 
+/**
+ * 只在主面板区域显示空状态，保留侧栏、主题/答疑/设置入口等既有结构。
+ * 旧实现直接覆盖整个 modalBody 的 innerHTML，会把侧栏一起抹掉直到下次重开面板。
+ */
+function showEmptyFavoritesState(message) {
+    if (!state.modalBodyElement) return;
+    clearLoadingPlaceholder();
+    let mainPanel = state.modalBodyElement.querySelector('.favorites-main-panel');
+    if (!mainPanel) {
+        mainPanel = document.createElement('div');
+        mainPanel.className = 'favorites-main-panel';
+        state.modalBodyElement.appendChild(mainPanel);
+    }
+    mainPanel.innerHTML = `<div class="favorites-empty">${message}</div>`;
+}
+
 export async function switchToCharacter(charEntry) {
     Logger.info(`切换到角色收藏: ${charEntry.name}（${charEntry.totalFavorites} 条）`);
 
+    // 标签筛选属于上一个聊天视图的语境，切换角色后必须清掉
+    state.activeTagFilter = null;
+    _tagFilterSwipeSnapshot = null;
+    updateTagBtnState();
+
     if (!charEntry.chatsWithFavorites || charEntry.chatsWithFavorites.length === 0) {
-        if (state.modalBodyElement) state.modalBodyElement.innerHTML = '<div class="favorites-empty">该角色没有收藏。</div>';
+        showEmptyFavoritesState('该角色没有收藏。');
         return;
     }
 
     // 扫描索引是轻量的（只含「有收藏的聊天」列表，不含完整消息/收藏数据）。
     // 优化：先加载收藏最多的第一个聊天立即渲染（秒开），其余聊天后台并行加载。
     abortBackgroundLoad();
-    if (state.modalBodyElement) state.modalBodyElement.innerHTML = '<div class="spinner"></div>';
+    if (state.modalBodyElement) showLoadingPlaceholder(buildMainPanelSkeleton());
     const controller = new AbortController();
     backgroundLoadController = controller;
 
@@ -1032,7 +1190,7 @@ export async function switchToCharacter(charEntry) {
         }
         if (!firstFull) {
             if (backgroundLoadController === controller) backgroundLoadController = null;
-            if (state.modalBodyElement) state.modalBodyElement.innerHTML = '<div class="favorites-empty">该角色没有收藏。</div>';
+            showEmptyFavoritesState('该角色没有收藏。');
             return;
         }
         state.allChatsFavoritesData = [firstFull];
@@ -1137,14 +1295,14 @@ export async function renderFavoriteItem(favItem, index, originalMessage = null,
     if (favItem.favoritedSwipes.length > 1) {
         navHtml = `
             <div class="fav-swipe-nav">
-                <i class="fa-solid fa-chevron-left nav-left" title="上一个收藏的Swipe"></i>
+                <i class="fa-solid fa-chevron-left nav-left" title="上一个收藏的Swipe" role="button" tabindex="0" aria-label="上一个收藏的 Swipe"></i>
                 <span class="nav-counter">${favItem.currentSwipeViewIndex + 1}/${favItem.favoritedSwipes.length}</span>
-                <i class="fa-solid fa-chevron-right nav-right" title="下一个收藏的Swipe"></i>
+                <i class="fa-solid fa-chevron-right nav-right" title="下一个收藏的Swipe" role="button" tabindex="0" aria-label="下一个收藏的 Swipe"></i>
             </div>`;
     }
 
     return `
-                <div class="favorite-item ${roleClass}" data-fav-id="${favId}" data-msg-id="${favItem.messageId}" data-swipe-id="${activeSwipeId}" mesid="${favItem.messageId}">
+                <div class="favorite-item ${roleClass}" data-fav-id="${escapeHtml(favId)}" data-msg-id="${escapeHtml(favItem.messageId)}" data-swipe-id="${escapeHtml(activeSwipeId)}" mesid="${escapeHtml(favItem.messageId)}">
                     <div class="fav-header-info">
                         ${noteHtml}
                         <div class="fav-meta-cluster">
@@ -1159,13 +1317,13 @@ export async function renderFavoriteItem(favItem, index, originalMessage = null,
 
                     <div class="fav-actions">
                         ${navHtml}
-                        <i class="fa-solid fa-eye" title="预览上下文"></i>
-                        <i class="fa-solid fa-expand" title="查看上下文"></i>
-                        <i class="fa-solid fa-pencil" title="编辑原文"></i>
-                        <i class="fa-solid fa-feather-pointed" title="编辑备注"></i>
-                        <i class="fa-solid fa-tags" title="编辑标签"></i>
-                        <i class="fa-solid fa-trash" title="取消收藏"></i>
-                        <i class="fa-solid fa-ellipsis-vertical fav-action-more" title="更多操作"></i>
+                        <i class="fa-solid fa-eye" title="预览上下文" role="button" tabindex="0" aria-label="预览上下文"></i>
+                        <i class="fa-solid fa-expand" title="查看上下文" role="button" tabindex="0" aria-label="查看上下文"></i>
+                        <i class="fa-solid fa-pencil" title="编辑原文" role="button" tabindex="0" aria-label="编辑原文"></i>
+                        <i class="fa-solid fa-feather-pointed" title="编辑备注" role="button" tabindex="0" aria-label="编辑备注"></i>
+                        <i class="fa-solid fa-tags" title="编辑标签" role="button" tabindex="0" aria-label="编辑标签"></i>
+                        <i class="fa-solid fa-trash" title="取消收藏" role="button" tabindex="0" aria-label="取消收藏"></i>
+                        <i class="fa-solid fa-ellipsis-vertical fav-action-more" title="更多操作" role="button" tabindex="0" aria-label="更多操作"></i>
                     </div>
                 </div>
             `;
@@ -1179,10 +1337,13 @@ export function renderPagination(currentPage, totalPages) {
     if (!paginationContainer) return;
 
     const getPageItem = (page, text = null, classes = []) => {
-        if (page === currentPage) classes.push('active');
-        if (!page) classes.push('disabled');
-        const textContent = text || page;
-        return `<div class="pagination-item ${classes.join(' ')}" data-page="${page}">${textContent}</div>`;
+        const cls = [...classes];
+        if (page === currentPage) cls.push('active');
+        if (!page) cls.push('disabled');
+        const label = text || page;
+        // tabindex 是无障碍三件套的一部分：role + tabindex 才能被 Tab 聚焦，
+        // Enter/Space 由 ui/a11y.js 的委托补齐（缺失时键盘用户无法翻页）
+        return `<div class="pagination-item ${cls.join(' ')}" data-page="${page}" role="button" tabindex="0" aria-label="第 ${label} 页">${label}</div>`;
     };
 
     let html = '';
@@ -1238,7 +1399,7 @@ export async function handleModalClick(event) {
     const target = event.target;
     const chatListItem = target.closest('.favorites-chat-list-item');
     if (chatListItem) {
-        const chatFile = String(chatListItem.dataset.chatFile).replace('.jsonl','');
+        const chatFile = stripJsonlExt(chatListItem.dataset.chatFile);
         if (chatFile && chatFile !== state.currentViewingChatFile) {
             state.chatListScrollTop = chatListItem.parentElement.scrollTop;
             state.currentPage = 1;
@@ -1253,8 +1414,8 @@ export async function handleModalClick(event) {
     if (paginationItem) {
         // 双击当前页码弹出跳转弹窗
         if (paginationItem.classList.contains('active')) {
-            const totalPages = Math.ceil((state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === state.currentViewingChatFile)?.favorites.length || 0) / state.itemsPerPage);
-            const { showInputModal } = await import('./components.js');
+            // 必须按当前标签筛选后的条数计算：用未筛选的总数会让跳页范围提示（1-N）大于实际页数
+            const totalPages = Math.max(1, Math.ceil(getFilteredFavorites(findChatData(state.currentViewingChatFile)).length / state.itemsPerPage));
             const result = await showInputModal(
                 `请输入要跳转的页码 (1-${totalPages})`,
                 '跳转页码',
@@ -1287,182 +1448,39 @@ export async function handleModalClick(event) {
     }
 
     const favItemEl = target.closest('.favorite-item');
+    if (!favItemEl) return;
 
-	if (favItemEl) {
-		const favId = favItemEl.dataset.favId;
-		const msgId = favItemEl.dataset.msgId;
-		const activeSwipeId = favItemEl.dataset.swipeId;
+    const favId = favItemEl.dataset.favId;
+    const msgId = favItemEl.dataset.msgId;
+    const activeSwipeId = favItemEl.dataset.swipeId;
 
-		// 多Swipe导航点击事件
-		if (target.classList.contains('nav-left') || target.classList.contains('nav-right')) {
-			const chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl', '') === state.currentViewingChatFile);
-			if (chatData && chatData.favorites) {
-				const favData = chatData.favorites.find(f => f.messageId === msgId);
-				if (favData) {
-					if (target.classList.contains('nav-left')) {
-						favData.currentSwipeViewIndex = (favData.currentSwipeViewIndex - 1 + favData.favoritedSwipes.length) % favData.favoritedSwipes.length;
-					} else {
-						favData.currentSwipeViewIndex = (favData.currentSwipeViewIndex + 1) % favData.favoritedSwipes.length;
-					}
-					renderFavoritesView(state.currentViewingChatFile);
-				}
-			}
-			return;
-		}
-
-		// 动态导入core.js中的函数以避免循环依赖
-		const { handleEditNote, handleDeleteFavoriteFromPopup, handleEditMessageContent, handleEditTags } = await import('../core.js');
-		// 动态导入preview.js中的函数
-		const { enterPreviewMode } = await import('./preview.js');
-
-		if (target.classList.contains('fa-expand')) {
-			await handleViewContext(msgId, state.currentViewingChatFile, activeSwipeId);
-		} else if (target.classList.contains('fa-feather-pointed')) {
-			await handleEditNote(favId, state.currentViewingChatFile);
-		} else if (target.classList.contains('fa-tags')) {
-			await handleEditTags(favId, state.currentViewingChatFile);
-		} else if (target.classList.contains('fa-trash')) {
-			await handleDeleteFavoriteFromPopup(favId, msgId, state.currentViewingChatFile);
-		} else if (target.classList.contains('fa-eye')) {
-			await enterPreviewMode(msgId, state.currentViewingChatFile);
-		} else if (target.classList.contains('fa-pencil')) {
-			await handleEditMessageContent(favId, msgId, state.currentViewingChatFile, activeSwipeId);
-		} else if (target.classList.contains('fav-action-more')) {
-            showMobileActionsMenu(target, favId, msgId, activeSwipeId);
+    // 多 Swipe 导航：循环切换当前查看的收藏 swipe
+    if (target.classList.contains('nav-left') || target.classList.contains('nav-right')) {
+        const chatData = findChatData(state.currentViewingChatFile);
+        const favData = chatData?.favorites?.find(f => f.messageId === msgId);
+        if (favData) {
+            const total = favData.favoritedSwipes.length;
+            const delta = target.classList.contains('nav-left') ? -1 : 1;
+            favData.currentSwipeViewIndex = (favData.currentSwipeViewIndex + delta + total) % total;
+            await renderFavoritesView(state.currentViewingChatFile);
         }
-	}
-}
-
-/**
- * Renders iframes in the specified element.
- */
-export function renderIframesInElement($container) {
-    if (!$container || !$container.length) return;
-
-    $container.find('pre').each(function() {
-        const $pre = $(this);
-        let codeContent = $pre.text();
-
-        if (codeContent.includes('<body') && codeContent.includes('</body>')) {
-            const bridgeScript = `
-            <script>
-                (function() {
-                    try {
-                        const functionsToBridge = [
-                            'getChatMessages', 'setChatMessages', 'createChatMessages', 'deleteChatMessages',
-                            'getContext', 'toastr', 'log', 'jQuery', '$', '_'
-                        ];
-                        functionsToBridge.forEach(function(funcName) {
-                            if (window.parent && typeof window.parent[funcName] !== 'undefined') {
-                                window[funcName] = window.parent[funcName];
-                            }
-                        });
-                    } catch (e) {
-                        console.error('Tavern Star Plugin Bridge Script Error:', e);
-                    }
-                })();
-            <\/script>`;
-
-            const headTagMatch = codeContent.match(/<head\s*>/i);
-            if (headTagMatch) {
-                const injectionPoint = headTagMatch.index + headTagMatch[0].length;
-                codeContent = codeContent.slice(0, injectionPoint) + bridgeScript + codeContent.slice(injectionPoint);
-            } else {
-                codeContent = bridgeScript + codeContent;
-            }
-
-            const $iframe = $('<iframe>');
-            $iframe.css({ 'width': '100%', 'border': 'none', 'margin': '5px 0', 'display': 'block', 'overflow': 'hidden' });
-            $iframe.attr('srcdoc', codeContent);
-            $iframe.on('load', function() {
-                const iframe = this;
-                try {
-                    const contentWindow = iframe.contentWindow;
-                    if (!contentWindow) return;
-                    const style = contentWindow.document.createElement('style');
-                    style.innerHTML = 'body { margin: 0; overflow: hidden; }';
-                    if (contentWindow.document.head) contentWindow.document.head.appendChild(style);
-                    const body = contentWindow.document.body;
-                    if (!body) return;
-                    const updateHeight = () => { $(iframe).css('height', body.scrollHeight + 'px'); };
-                    const observer = new ResizeObserver(updateHeight);
-                    observer.observe(body);
-                    updateHeight();
-                } catch (e) {
-                    Logger.error("Error setting up iframe resizer:", e);
-                    setTimeout(() => {
-                        if (iframe.contentWindow && iframe.contentWindow.document.body) {
-                            $(iframe).css('height', iframe.contentWindow.document.body.scrollHeight + 'px');
-                        }
-                    }, 200);
-                }
-            });
-            $pre.replaceWith($iframe);
-        }
-    });
-}
-
-/**
- * Handles the favorite toggle event.
- */
-export async function handleFavoriteToggle($target, event) {
-    Logger.debug('触发收藏切换');
-    ensureCurrentChatIsCached();
-    // $target 是传入的 jQuery 对象，指向 .favorite-toggle-icon 元素
-    if (!$target || !$target.length) return;
-    const messageElement = $target.closest('.mes');
-    if (!messageElement || !messageElement.length) return;
-    const messageIdString = messageElement.attr('mesid');
-    if (!messageIdString) return;
-    let context;
-    try {
-        context = getContext();
-    } catch (e) {
         return;
     }
 
-    // 在预览模式下，使用当前查看的聊天文件
-    const targetChatFile = state.isPreviewingContext ? state.currentViewingChatFile : String(context.chatId || '').replace('.jsonl','');
-
-    // 获取正确的聊天数据
-    let chatData, currentChatMetadata;
-    if (state.isPreviewingContext) {
-        chatData = state.allChatsFavoritesData.find(c => String(c.fileName).replace('.jsonl','') === targetChatFile);
-        if (!chatData) {
-            toastr.error('无法在预览模式下切换收藏状态');
-            return;
-        }
-        currentChatMetadata = chatData.metadata;
-    } else {
-        currentChatMetadata = ensureFavoritesArrayExists();
-    }
-
-    if (!currentChatMetadata) return;
-
-    const messageIndex = parseInt(messageIdString, 10);
-    const messages = state.isPreviewingContext ? chatData.messages : context.chat;
-    const message = messages[messageIndex];
-    if (!message) return;
-
-    // 动态导入core函数以避免循环依赖
-    const { addFavorite, removeFavoriteById } = await import('../core.js');
-
-    const swipeId = message.swipe_id || 0;
-    let isCurrentlyFavorited = false;
-    if (message.swipe_info && message.swipe_info[swipeId] && message.swipe_info[swipeId].star_favorite) {
-        isCurrentlyFavorited = true;
-    }
-
-    const iconElement = $target.find('i');
-
-    if (!isCurrentlyFavorited) {
-        $target.addClass('favorited');
-        const messageInfo = { messageId: messageIdString, sender: message.name, role: message.is_user ? 'user' : 'character' };
-        addFavorite(messageInfo, targetChatFile);
-    } else {
-        $target.removeClass('favorited');
-        const favId = message.swipe_info[swipeId].star_favorite.id;
-        removeFavoriteById(favId, targetChatFile);
+    if (target.classList.contains('fa-expand')) {
+        await handleViewContext(msgId, state.currentViewingChatFile, activeSwipeId);
+    } else if (target.classList.contains('fa-feather-pointed')) {
+        await handleEditNote(favId, state.currentViewingChatFile);
+    } else if (target.classList.contains('fa-tags')) {
+        await handleEditTags(favId, state.currentViewingChatFile);
+    } else if (target.classList.contains('fa-trash')) {
+        await handleDeleteFavoriteFromPopup(favId, msgId, state.currentViewingChatFile);
+    } else if (target.classList.contains('fa-eye')) {
+        await enterPreviewMode(msgId, state.currentViewingChatFile);
+    } else if (target.classList.contains('fa-pencil')) {
+        await handleEditMessageContent(favId, msgId, state.currentViewingChatFile, activeSwipeId);
+    } else if (target.classList.contains('fav-action-more')) {
+        showMobileActionsMenu(target, favId, msgId, activeSwipeId);
     }
 }
 
@@ -1508,8 +1526,8 @@ export function showMobileActionsMenu(targetIcon, favId, msgId, activeSwipeId) {
         <div class="star-mobile-actions-item" data-action="feather">
             <i class="fa-solid fa-feather-pointed"></i> 编辑备注
         </div>
-        <div class="star-mobile-actions-item" data-action="trash" style="color: var(--star-text-deleted);">
-            <i class="fa-solid fa-trash" style="color: var(--star-text-deleted);"></i> 取消收藏
+        <div class="star-mobile-actions-item star-mobile-actions-danger" data-action="trash">
+            <i class="fa-solid fa-trash"></i> 取消收藏
         </div>
     `;
 
@@ -1537,7 +1555,6 @@ export function showMobileActionsMenu(targetIcon, favId, msgId, activeSwipeId) {
 
         menu.classList.remove('visible');
         const action = item.dataset.action;
-        const { handleEditNote, handleDeleteFavoriteFromPopup, handleEditMessageContent } = await import('../core.js');
 
         if (action === 'pencil') {
             await handleEditMessageContent(favId, msgId, state.currentViewingChatFile, activeSwipeId);
@@ -1549,5 +1566,23 @@ export function showMobileActionsMenu(targetIcon, favId, msgId, activeSwipeId) {
     };
 }
 
-// Export applySavedTheme from settings.js for preview.js to use
-export { applySavedTheme };
+// =================================================================
+//        模块加载后的注册（钩子 / 网关 / 后台任务取消）
+// =================================================================
+
+// 1) 向 core 注册跨层钩子：
+//    - beforeSave：保存当前聊天前中断后台预加载（避免 Windows 文件锁导致保存 EPERM）
+//    - refreshFavoritesView：收藏增删改后刷新面板
+setCoreHooks({
+    beforeSave: () => abortPreload(),
+    refreshFavoritesView: (chatFile) => renderFavoritesView(chatFile),
+});
+
+// 2) 向 modal-gateway 注册自身实现，供入口层按需调用（避免入口静态依赖本模块）
+registerFavoritesModal({
+    open: openFavoritesModal,
+    close: closeFavoritesModal,
+});
+
+// 3) 切换聊天/角色时取消进行中的后台加载（入口层通过 runCancellers 统一调用）
+registerCanceller(() => abortBackgroundLoad());

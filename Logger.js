@@ -23,13 +23,22 @@ class Logger {
     static currentLevel = LogLevel.RUNTIME;
     static logHistory = [];
 
-    static pushToHistory(levelName, ...args) {
+    /**
+     * 写入内存日志历史（供调试面板读取）。
+     * 惰性序列化：先判断该级别是否需要记录，否则不再对参数做 JSON.stringify——
+     * 调试级别的大对象序列化在热点路径（增删收藏、刷新图标）上是纯浪费。
+     * @param {number} minLevel - 记录该条日志所需的最低级别（与 LogLevel 对应）
+     */
+    static pushToHistory(minLevel, levelName, ...args) {
+        if (this.currentLevel < minLevel) return;
+
         // 时间戳只保留 HH:MM:SS，去掉年月日前缀
         const now = new Date();
         const timestamp = String(now.getHours()).padStart(2, '0') + ':' +
                           String(now.getMinutes()).padStart(2, '0') + ':' +
                           String(now.getSeconds()).padStart(2, '0');
         const message = args.map(arg => {
+            if (arg === null) return 'null';
             if (typeof arg === 'object') {
                 try {
                     return JSON.stringify(arg, (key, value) => {
@@ -38,6 +47,7 @@ class Logger {
                     });
                 } catch (e) { return '[复杂对象/解析失败]'; }
             }
+            if (typeof arg === 'function') return '[Function]';
             return String(arg);
         }).join(' ');
 
@@ -75,27 +85,27 @@ class Logger {
     static shouldLog(level) { return this.currentLevel >= level; }
 
     static error(...args) {
-        this.pushToHistory('ERROR', ...args);
+        this.pushToHistory(LogLevel.CORE, 'ERROR', ...args);
         if (this.shouldLog(LogLevel.CORE)) console.error(PREFIX, CONSOLE_STYLES.error, ...args);
     }
 
     static warn(...args) {
-        this.pushToHistory('WARN', ...args);
+        this.pushToHistory(LogLevel.CORE, 'WARN', ...args);
         if (this.shouldLog(LogLevel.CORE)) console.warn(PREFIX, CONSOLE_STYLES.warn, ...args);
     }
 
     static info(...args) {
-        this.pushToHistory('INFO', ...args);
+        this.pushToHistory(LogLevel.RUNTIME, 'INFO', ...args);
         if (this.shouldLog(LogLevel.RUNTIME)) console.log(PREFIX, CONSOLE_STYLES.info, ...args);
     }
 
     static success(...args) {
-        this.pushToHistory('SUCCESS', ...args);
+        this.pushToHistory(LogLevel.RUNTIME, 'SUCCESS', ...args);
         if (this.shouldLog(LogLevel.RUNTIME)) console.log(PREFIX, CONSOLE_STYLES.success, ...args);
     }
 
     static debug(...args) {
-        this.pushToHistory('DEBUG', ...args);
+        this.pushToHistory(LogLevel.FULL, 'DEBUG', ...args);
         if (this.shouldLog(LogLevel.FULL)) console.debug(PREFIX, CONSOLE_STYLES.debug, ...args);
     }
 }

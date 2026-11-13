@@ -71,7 +71,7 @@ let fontObserverBound = false;
 //                   IndexedDB 资源缓存管理器
 // =================================================================
 class AssetCacheManager {
-    constructor(dbName = 'StarScreenshotCache', version = 1) {
+    constructor(dbName = 'StarScreenshotCache') {
         this.db = null;
         this.dbName = dbName;
         // dbVersion 提升到 2 以预留 imageData store（沿用 scane2 结构）
@@ -108,6 +108,7 @@ class AssetCacheManager {
     }
 
     _getStore(storeName, mode = 'readonly') {
+        if (!this.db) throw new Error('IndexedDB 缓存不可用（未初始化或打开失败）');
         const transaction = this.db.transaction(storeName, mode);
         return transaction.objectStore(storeName);
     }
@@ -195,7 +196,14 @@ const assetCacheManager = new AssetCacheManager();
 async function getFontDataUrlAsync(fontUrl) {
     if (FONT_DATA_MEMORY_CACHE.has(fontUrl)) return FONT_DATA_MEMORY_CACHE.get(fontUrl);
 
-    let dataUrl = await assetCacheManager.getFontData(fontUrl);
+    // IndexedDB 在隐私模式/配额耗尽时会打开失败（init 的错误已被吞掉）：
+    // 缓存读取失败必须按「未命中」继续走网络，不能把异常抛给截图主流程。
+    let dataUrl = null;
+    try {
+        dataUrl = await assetCacheManager.getFontData(fontUrl);
+    } catch (err) {
+        Logger.debug('字体缓存读取失败（按未命中处理）:', fontUrl, err);
+    }
     if (dataUrl) {
         FONT_DATA_MEMORY_CACHE.set(fontUrl, dataUrl);
         return dataUrl;
@@ -495,8 +503,13 @@ export async function customImageFetchFn(url) {
     // L1 内存
     if (IMAGE_DATA_MEMORY_CACHE.has(url)) return IMAGE_DATA_MEMORY_CACHE.get(url);
 
-    // L2 IndexedDB
-    let dataUrl = await assetCacheManager.getImageData(url);
+    // L2 IndexedDB（失败按未命中处理，继续尝试网络，避免整张截图因缓存层不可用而失败）
+    let dataUrl = null;
+    try {
+        dataUrl = await assetCacheManager.getImageData(url);
+    } catch (err) {
+        Logger.debug('图片缓存读取失败（按未命中处理）:', url, err);
+    }
     if (dataUrl) {
         IMAGE_DATA_MEMORY_CACHE.set(url, dataUrl);
         return dataUrl;
@@ -587,19 +600,6 @@ export function invalidateFontCaches() {
 //               截图设置面板 —— 缓存查询与管理
 // =================================================================
 
-/**
- * 从 dataURL 估算实际二进制大小（字节）。
- * dataURL 格式: `data:font/woff2;base64,<payload>`
- * Base64 编码膨胀率为 4/3，即 4 字符 ≈ 3 字节。
- */
-function estimateSizeFromDataUrl(dataUrl) {
-    if (!dataUrl || typeof dataUrl !== 'string') return 0;
-    const commaIdx = dataUrl.indexOf(',');
-    const base64 = commaIdx > -1 ? dataUrl.substring(commaIdx + 1) : dataUrl;
-    // 去掉填充字符 '=' 的影响后 * 0.75
-    const stripped = base64.replace(/[=]/g, '');
-    return Math.round(stripped.length * 0.75);
-}
 
 /** 从 URL 提取可读的文件名 */
 function extractFilename(url) {
@@ -805,6 +805,9 @@ export async function deleteImageCacheEntry(imageUrl) {
 export async function clearAllFontCache() {
     await assetCacheManager.init();
     FONT_DATA_MEMORY_CACHE.clear();
+    // Font Awesome 的内联 CSS 单独缓存在内存里（getFontAwesomeCssAsync 命中即返回），
+    // 不清掉的话「字体缓存已清空」后它仍会被内联进每次截图，DB 却一直是空的。
+    CACHED_FA_CSS = null;
     return new Promise((resolve, reject) => {
         const store = assetCacheManager._getStore('fontData', 'readwrite');
         const request = store.clear();

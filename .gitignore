@@ -2,10 +2,19 @@
 .pi/
 .playwright-mcp/
 
+# 本地工具目录（Claude Code 工作树等）
+.claude/
+
+# 浏览器回归测试的截图证据（临时产物，不入库）
+browser-shots/
+
 # codegraph 本地索引
 .codegraph/
 
-# 依赖
+# 本地问题核对脚本与合成测试聊天（临时产物，不入库）
+.star-test/
+
+# 依赖（仅开发期的 ESLint 等工具链）
 node_modules/
 
 # 截图库完整源码（开发参考，运行时仅使用 lib/modern-screenshot.js）

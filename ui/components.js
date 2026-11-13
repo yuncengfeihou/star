@@ -1,17 +1,8 @@
 // ui/components.js - 通用弹窗组件
 
 import { state } from '../state.js';
+import { escapeHtml } from '../utils.js';
 
-/**
- * HTML 转义（标签名等用户可控文本插入 HTML 前必须转义）。
- */
-function escapeHtmlForTags(str) {
-    return String(str == null ? '' : str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
 
 // =================================================================
 //                      通用弹窗函数
@@ -245,12 +236,9 @@ export function showTextModal(content, title = '信息', options = {}) {
             container.dataset.starTheme = 'dark';
         }
 
-        let popupResult = false;
-        let dlg = modal;
+        const dlg = modal;
 
         const closeModal = async (isOk) => {
-            popupResult = isOk;
-
             // 如果有 onClosing 回调，先调用它
             if (onClosing) {
                 const shouldClose = await onClosing({ result: isOk, dlg: dlg });
@@ -462,11 +450,11 @@ export function showTagsModal(currentTags = [], title = '编辑标签') {
         }
 
         // 初始标签去重清洗
-        let tags = [...new Set((currentTags || []).map(t => String(t).trim()).filter(Boolean))];
+        const tags = [...new Set((currentTags || []).map(t => String(t).trim()).filter(Boolean))];
 
         const renderChips = () => {
             chipsEl.innerHTML = tags.map((t, i) => `
-                <span class="star-tag-chip">${escapeHtmlForTags(t)}<i class="fa-solid fa-xmark star-tag-chip-remove" data-idx="${i}"></i></span>
+                <span class="star-tag-chip">${escapeHtml(t)}<i class="fa-solid fa-xmark star-tag-chip-remove" data-idx="${i}" role="button" tabindex="0" aria-label="删除标签"></i></span>
             `).join('');
             chipsEl.querySelectorAll('.star-tag-chip-remove').forEach(x => {
                 x.addEventListener('click', () => {

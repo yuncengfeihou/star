@@ -1,14 +1,14 @@
 // ui/settings.js - 设置与主题相关功能
 
-import { getContext, extension_settings } from '../../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../../script.js';
-import { state, PLUGIN_NAME } from '../state.js';
+import { state, getSetting, setSetting } from '../state.js';
+import { formatBytes, escapeHtml } from '../utils.js';
+import { getCoreHooks } from '../hooks.js';
 import { showTextModal, showConfirmModal } from './components.js';
 import Logger from '../Logger.js';
 import { toggleDebugPanel } from './debug.js';
+import { showMigrationDialog } from './migration.js';
 import {
     getFontCacheStats,
-    deleteFontCacheEntry,
     deleteFontCacheEntries,
     deleteImageCacheEntry,
     clearAllFontCache,
@@ -16,74 +16,14 @@ import {
     getImageDataUrl,
 } from './font-subset.js';
 
-// Constants from main.js (will be imported)
-const MODAL_CLASS_NAME = 'favorites-modal-dialog';
+// 收藏面板的 DOM 类名（面板结构定义在 ui/main.js，此处只引用其稳定类名）
 const MODAL_CLOSE_X_CLASS = 'favorites-modal-close-x';
-const SIDEBAR_TOGGLE_CLASS = 'favorites-sidebar-toggle';
-const SIDEBAR_TOGGLE_ID = 'favorites-avatar-toggle';
-const SEARCH_CONTAINER_CLASS = 'favorites-search-container';
-const SEARCH_FILTER_CLASS = 'favorites-search-filter';
-const SEARCH_ICON_CLASS = 'favorites-search-icon';
-const SEARCH_INPUT_CLASS = 'favorites-search-input';
 
 // =================================================================
-//                      THEME TOGGLE & USAGE GUIDE
+//                      SETTINGS MENU & USAGE GUIDE
 // =================================================================
-
-/**
- * Toggles the theme between light and dark, saving the choice to extension_settings.
- */
-export function toggleTheme() {
-    if (!state.modalDialogElement) return;
-
-    // 判断当前是否为暗色模式
-    const isCurrentlyDark = state.modalDialogElement.dataset.starTheme === 'dark';
-    const isDark = !isCurrentlyDark; // 反转状态
-
-    if (isDark) {
-        state.modalDialogElement.dataset.starTheme = 'dark';
-    } else {
-        state.modalDialogElement.removeAttribute('data-star-theme');
-    }
-
-    const contextContainer = document.querySelector('.context-messages-container');
-    if (contextContainer) {
-        if (isDark) {
-            contextContainer.dataset.starTheme = 'dark';
-        } else {
-            contextContainer.removeAttribute('data-star-theme');
-        }
-    }
-
-    extension_settings[PLUGIN_NAME].theme = isDark ? 'dark' : 'light';
-    saveSettingsDebounced();
-    toastr.info(isDark ? '已切换至暗色主题' : '已切换至白天主题', '', { timeOut: 1500 });
-}
-
-/**
- * Applies the saved theme from extension_settings when the modal or context viewer opens.
- */
-export function applySavedTheme() {
-    const savedTheme = extension_settings[PLUGIN_NAME]?.theme || 'light';
-    const isDark = savedTheme === 'dark';
-
-    if (state.modalDialogElement) {
-        if (isDark) {
-            state.modalDialogElement.dataset.starTheme = 'dark';
-        } else {
-            state.modalDialogElement.removeAttribute('data-star-theme');
-        }
-    }
-
-    const contextContainer = document.querySelector('.context-messages-container');
-    if (contextContainer) {
-        if (isDark) {
-            contextContainer.dataset.starTheme = 'dark';
-        } else {
-            contextContainer.removeAttribute('data-star-theme');
-        }
-    }
-}
+// 注：主题的读写与切换动效已收敛到 ui/theme.js（唯一事实来源挂在 documentElement）。
+// 此处不再持有主题状态，只负责设置菜单本身的呈现。
 
 /**
  * Shows the long-press menu with options for theme, context range, items per page, and usage guide.
@@ -146,9 +86,8 @@ export function showAvatarLongPressMenu() {
     }
 
     // 读取当前设置值，用于菜单右侧的状态回显
-    const starSettings = extension_settings[PLUGIN_NAME] || {};
-    const currentContextRange = starSettings.contextViewRange ?? 1;
-    const currentItemsPerPage = starSettings.itemsPerPage ?? 10;
+    const currentContextRange = getSetting('contextViewRange');
+    const currentItemsPerPage = getSetting('itemsPerPage');
     const debugEnabled = state.debugPanel.enabled;
 
     menuDialog.innerHTML = `
@@ -184,6 +123,11 @@ export function showAvatarLongPressMenu() {
                 <i class="fa-solid fa-bug star-options-item-icon"></i>
                 <span class="star-options-item-label" id="star-debug-menu-text">${debugEnabled ? '日志面板' : '启用日志面板'}</span>
                 <span class="star-options-item-value">${debugEnabled ? '已启用' : '已关闭'}</span>
+            </div>
+            <div class="star-options-menu-item" data-action="data-migration">
+                <i class="fa-solid fa-database star-options-item-icon"></i>
+                <span class="star-options-item-label">数据迁移</span>
+                <span class="star-options-item-value star-options-menu-arrow"><i class="fa-solid fa-chevron-right"></i></span>
             </div>
             <div class="star-options-menu-item" data-action="usage-guide">
                 <i class="fa-solid fa-book-open star-options-item-icon"></i>
@@ -234,6 +178,8 @@ export function showAvatarLongPressMenu() {
             setTimeout(showItemsPerPageSettingsPopup, 100);
         } else if (action === 'toggle-debug-panel') {
             setTimeout(toggleDebugPanel, 100);
+        } else if (action === 'data-migration') {
+            setTimeout(showMigrationDialog, 100);
         } else if (action === 'screenshot-settings') {
             setTimeout(showScreenshotSettingsPopup, 100);
         } else if (action === 'shortcut-info') {
@@ -249,13 +195,8 @@ export function showAvatarLongPressMenu() {
  * 显示用于设置上下文查看范围的弹出窗口，并正确保存设置。
  */
 export async function showContextRangeSettingsPopup() {
-    // 确保设置对象存在
-    if (!extension_settings[PLUGIN_NAME]) {
-        extension_settings[PLUGIN_NAME] = {};
-    }
-
-    // 从设置中读取当前值，如果不存在则默认为 1
-    const currentValue = extension_settings[PLUGIN_NAME].contextViewRange ?? 1;
+    // 当前值（未设置过时为 schema 默认值）
+    const currentValue = getSetting('contextViewRange');
 
     const popupHtml = `
         <div class="star-settings-description">
@@ -288,8 +229,7 @@ export async function showContextRangeSettingsPopup() {
 
                 if (!isNaN(newValue) && newValue >= 0) {
                     if (newValue !== currentValue) {
-                        extension_settings[PLUGIN_NAME].contextViewRange = newValue;
-                        saveSettingsDebounced();
+                        setSetting('contextViewRange', newValue);
                         Logger.info(`Context view range updated to: ${newValue}`);
                         toastr.success(`上下文范围已成功更新为: ${newValue}`);
                     }
@@ -307,11 +247,7 @@ export async function showContextRangeSettingsPopup() {
  * 显示用于设置每页显示消息数的弹出窗口。
  */
 export async function showItemsPerPageSettingsPopup() {
-    if (!extension_settings[PLUGIN_NAME]) {
-        extension_settings[PLUGIN_NAME] = {};
-    }
-
-    const currentValue = extension_settings[PLUGIN_NAME].itemsPerPage ?? 10;
+    const currentValue = getSetting('itemsPerPage');
 
     const popupHtml = `
         <div class="star-settings-description">
@@ -339,12 +275,13 @@ export async function showItemsPerPageSettingsPopup() {
                     return true;
                 }
 
-                const newValue = parseInt(inputElement.value, 10);
+                const parsedValue = parseInt(inputElement.value, 10);
+                // 输入框的 max=50 只是浏览器提示，程序化赋值不受约束；这里强制收敛到 1–50
+                const newValue = isNaN(parsedValue) ? NaN : Math.min(50, Math.max(1, parsedValue));
 
                 if (!isNaN(newValue) && newValue > 0) {
                     if (newValue !== currentValue) {
-                        extension_settings[PLUGIN_NAME].itemsPerPage = newValue;
-                        saveSettingsDebounced();
+                        setSetting('itemsPerPage', newValue);
 
                         // 关键：同步更新全局变量
                         state.itemsPerPage = newValue;
@@ -352,13 +289,14 @@ export async function showItemsPerPageSettingsPopup() {
                         Logger.info(`Items per page updated to: ${newValue}`);
                         toastr.success(`每页显示数量已更新为: ${newValue}`);
 
-                        // 动态导入以避免循环依赖
-                        const { renderFavoritesView } = await import('./main.js');
-                        // 关键：刷新视图以立即应用更改
-                        if (state.modalElement && state.modalElement.classList.contains('visible')) {
+                        // 通过 hooks 通知收藏面板刷新（面板模块已加载时钩子才存在，
+                        // 这样设置模块无需反向 import 面板，避免循环依赖）
+                        const refresh = getCoreHooks().refreshFavoritesView;
+                        if (typeof refresh === 'function'
+                            && state.modalElement && state.modalElement.classList.contains('visible')) {
                             // 重置到第一页，避免因总页数减少而导致当前页码越界
                             state.currentPage = 1;
-                            await renderFavoritesView(state.currentViewingChatFile);
+                            await refresh(state.currentViewingChatFile);
                         }
                     }
                 } else {
@@ -478,7 +416,7 @@ const sectionContents = {
             <h3>收藏消息</h3>
             <p>每条消息的<strong>右上角</strong>都有一个半透明的星标图标 <i class="fa-regular fa-star"></i>：</p>
             <ol>
-                <li><strong>单击</strong>该图标，星标会变为实心的黄色 <i class="fa-solid fa-star" style="color:yellow;"></i>，表示收藏成功。</li>
+                <li><strong>单击</strong>该图标，星标会变为实心的黄色 <i class="fa-solid fa-star star-star-demo-icon"></i>，表示收藏成功。</li>
                 <li><strong>再次单击</strong>同一图标，星标恢复为空心状态，表示取消收藏。</li>
             </ol>
             <div class="star-guide-tip">
@@ -777,9 +715,12 @@ const sectionContents = {
     }
 
 export function showUsageGuidePopup() {
-    // 防止重复创建
+    // 防止重复创建：必须走完整清理（摘掉 resize / Esc 监听），否则每重开一次泄漏一对
     const existing = document.getElementById('star-guide-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        if (typeof existing._starClose === 'function') existing._starClose();
+        existing.remove();
+    }
 
     const overlay = document.createElement('div');
     overlay.id = 'star-guide-overlay';
@@ -797,6 +738,10 @@ export function showUsageGuidePopup() {
     `).join('');
 
     const dialog = document.createElement('div');
+    // id 必须存在：ui/main.js 的 Esc 层级表与 ui/scope.js 的作用域名单都按
+    // getElementById('star-guide-dialog') 查找。此前只有同名 class，导致「使用说明」
+    // 打开时按一次 Esc 会直接关掉它背后的收藏面板（两层一起消失）。
+    dialog.id = 'star-guide-dialog';
     dialog.className = 'star-guide-dialog';
     if (isMobile) dialog.classList.add('sidebar-closed');
     if (state.modalDialogElement && state.modalDialogElement.dataset.starTheme === 'dark') {
@@ -923,9 +868,12 @@ export function showUsageGuidePopup() {
     closeOverlay = () => {
         window.removeEventListener('resize', handleResize);
         document.removeEventListener('keydown', handleEsc);
+        overlay._starClose = null;
         overlay.classList.remove('visible');
         setTimeout(() => overlay.remove(), 300);
     };
+    // 供「重复打开」路径调用完整清理
+    overlay._starClose = () => closeOverlay();
 
     // 显示弹窗：先确保渲染（opacity:0 防闪），测量居中后再展示
     dialog.style.opacity = '0';
@@ -938,11 +886,6 @@ export function showUsageGuidePopup() {
 //                   截图设置弹窗
 // =================================================================
 
-function formatBytes(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-}
 
 export async function showScreenshotSettingsPopup() {
     const existing = document.getElementById('star-ss-settings-overlay');
@@ -988,6 +931,8 @@ export async function showScreenshotSettingsPopup() {
 
 async function renderScreenshotCacheUI(dialog) {
     const bodyEl = document.getElementById('star-ss-body');
+    // 浮层可能在异步读取/删除期间被关闭；此时直接放弃渲染，避免对 null 取属性抛错
+    if (!bodyEl) return;
 
     try {
         const stats = await getFontCacheStats();
@@ -1017,12 +962,12 @@ async function renderScreenshotCacheUI(dialog) {
                 const setId = 'star-ss-set-' + set.id.replace(/[^a-zA-Z0-9]/g, '-');
                 const activeBadge = set.isActive ? ' <span class="star-ss-active-badge">当前使用</span>' : '';
                 html += `
-                <div class="star-ss-set-card" data-set-id="${set.id.replace(/"/g, '&quot;')}">
+                <div class="star-ss-set-card" data-set-id="${escapeHtml(set.id)}">
                     <div class="star-ss-set-header" data-toggle="${setId}">
-                        <span class="star-ss-set-label">${set.label}${activeBadge}</span>
+                        <span class="star-ss-set-label">${escapeHtml(set.label)}${activeBadge}</span>
                         <span class="star-ss-set-summary">${formatBytes(set.totalBytes)}</span>
                     </div>
-                    <div class="star-ss-set-body" id="${setId}" style="display:none">
+                    <div class="star-ss-set-body" id="${setId}">
                         <div class="star-ss-table">
                             <div class="star-ss-table-header">
                                 <span class="star-ss-col-name">文件名</span>
@@ -1032,7 +977,7 @@ async function renderScreenshotCacheUI(dialog) {
                                 const sizeClass = f.sizeBytes > 500 * 1024 ? 'star-ss-size-large' : f.sizeBytes > 100 * 1024 ? 'star-ss-size-medium' : '';
                                 return `
                                 <div class="star-ss-table-row">
-                                    <span class="star-ss-col-name" title="${f.url.replace(/"/g, '&quot;')}">${f.name}</span>
+                                    <span class="star-ss-col-name" title="${escapeHtml(f.url)}">${escapeHtml(f.name)}</span>
                                     <span class="star-ss-col-size ${sizeClass}">${formatBytes(f.sizeBytes)}</span>
                                 </div>`;
                             }).join('')}
@@ -1045,7 +990,7 @@ async function renderScreenshotCacheUI(dialog) {
         // ── 图片 ──
         const imgCount = stats.totals.imageCount;
         const imgSizeMB = (stats.totals.imageBytes / (1024 * 1024)).toFixed(1);
-        html += `<div class="star-ss-section" style="margin-top:18px">
+        html += `<div class="star-ss-section star-ss-section-spaced">
             <div class="star-ss-section-title star-ss-section-title-row">
                 <span>🖼️ 图片缓存（${imgCount}个/${imgSizeMB}MB）</span>
                 <button class="star-ss-clear-all-btn menu_button" data-action="clear-images" title="清空所有图片缓存"${stats.images.length === 0 ? ' disabled' : ''}><i class="fa-solid fa-trash-can"></i></button>
@@ -1058,10 +1003,10 @@ async function renderScreenshotCacheUI(dialog) {
                     <span class="star-ss-col-size">大小</span>
                 </div>
                 ${stats.images.map(im => {
-                    const esc = im.url.replace(/"/g, '&quot;');
+                    const esc = escapeHtml(im.url);
                     return `
                     <div class="star-ss-table-row star-ss-img-row" data-img-url="${esc}">
-                        <span class="star-ss-col-name" title="${esc}">${im.name}</span>
+                        <span class="star-ss-col-name" title="${esc}">${escapeHtml(im.name)}</span>
                         <span class="star-ss-col-size">${formatBytes(im.sizeBytes)}</span>
                     </div>`;
                 }).join('')}
@@ -1105,11 +1050,8 @@ async function renderScreenshotCacheUI(dialog) {
             hdr.addEventListener('click', (e) => {
                 // 不拦截长按
                 e.stopPropagation();
-                const targetId = hdr.dataset.toggle;
-                const body = document.getElementById(targetId);
-                if (!body) return;
-                const isHidden = body.style.display === 'none';
-                body.style.display = isHidden ? 'block' : 'none';
+                const body = document.getElementById(hdr.dataset.toggle);
+                body?.classList.toggle('expanded');
             });
         });
 
@@ -1126,9 +1068,14 @@ async function renderScreenshotCacheUI(dialog) {
                     { noBorder: true, okButton: '确认', zIndex: 10004 }
                 );
                 if (ok) {
-                    await deleteFontCacheEntries(set.files.map(f => f.url));
-                    await renderScreenshotCacheUI(dialog);
-                    toastr.success(`已删除字体集: ${set.label}`);
+                    try {
+                        await deleteFontCacheEntries(set.files.map(f => f.url));
+                        await renderScreenshotCacheUI(dialog);
+                        toastr.success(`已删除字体集: ${set.label}`);
+                    } catch (error) {
+                        Logger.error('删除字体集失败:', error);
+                        toastr.error(`删除字体集失败：${error?.message || '未知错误'}`);
+                    }
                 }
             });
         });
@@ -1151,7 +1098,7 @@ async function renderScreenshotCacheUI(dialog) {
                 if (timer) { clearTimeout(timer); timer = null; }
             };
 
-            row.addEventListener('pointerdown', (e) => {
+            row.addEventListener('pointerdown', () => {
                 didLongPress = false;
                 clearTimer();
                 timer = setTimeout(() => {
@@ -1160,9 +1107,14 @@ async function renderScreenshotCacheUI(dialog) {
                     // 长按：直接在回调中弹出删除确认弹窗
                     showConfirmModal(`确认删除「${imgName}」图片缓存吗？`, '删除图片缓存', { noBorder: true, okButton: '确认', zIndex: 10004 }).then(async (ok) => {
                         if (ok) {
-                            await deleteImageCacheEntry(imgUrl);
-                            await renderScreenshotCacheUI(dialog);
-                            toastr.success('已删除');
+                            try {
+                                await deleteImageCacheEntry(imgUrl);
+                                await renderScreenshotCacheUI(dialog);
+                                toastr.success('已删除');
+                            } catch (error) {
+                                Logger.error('删除图片缓存失败:', error);
+                                toastr.error(`删除图片缓存失败：${error?.message || '未知错误'}`);
+                            }
                         }
                     });
                 }, 600);
@@ -1178,7 +1130,7 @@ async function renderScreenshotCacheUI(dialog) {
             });
 
             // 单击：预览图片（仅短按触发）
-            row.addEventListener('click', async (e) => {
+            row.addEventListener('click', async () => {
                 if (didLongPress) return;
                 try {
                     const dataUrl = await getImageDataUrl(imgUrl);
@@ -1188,6 +1140,7 @@ async function renderScreenshotCacheUI(dialog) {
                         toastr.warning('图片缓存数据不可用');
                     }
                 } catch (err) {
+                    Logger.debug('加载图片缓存失败:', err);
                     toastr.error('加载图片失败');
                 }
             });
@@ -1201,33 +1154,50 @@ async function renderScreenshotCacheUI(dialog) {
                 if (action === 'clear-fonts') {
                     const ok = await showConfirmModal('确定要清空所有字体缓存吗？下次截图需要重新下载字体。', '清空字体缓存', { noBorder: true, okButton: '确认', zIndex: 10004 });
                     if (ok) {
-                        await clearAllFontCache();
-                        await renderScreenshotCacheUI(dialog);
-                        toastr.success('字体缓存已清空');
+                        try {
+                            await clearAllFontCache();
+                            await renderScreenshotCacheUI(dialog);
+                            toastr.success('字体缓存已清空');
+                        } catch (error) {
+                            Logger.error('清空字体缓存失败:', error);
+                            toastr.error(`清空字体缓存失败：${error?.message || '未知错误'}`);
+                        }
                     }
                 } else if (action === 'clear-images') {
                     const ok = await showConfirmModal('确定要清空所有图片缓存吗？', '清空图片缓存', { noBorder: true, okButton: '确认', zIndex: 10004 });
                     if (ok) {
-                        await clearAllImageCache();
-                        await renderScreenshotCacheUI(dialog);
-                        toastr.success('图片缓存已清空');
+                        try {
+                            await clearAllImageCache();
+                            await renderScreenshotCacheUI(dialog);
+                            toastr.success('图片缓存已清空');
+                        } catch (error) {
+                            Logger.error('清空图片缓存失败:', error);
+                            toastr.error(`清空图片缓存失败：${error?.message || '未知错误'}`);
+                        }
                     }
                 }
             });
         });
 
     } catch (err) {
-        bodyEl.innerHTML = `<div class="star-ss-error">❌ 读取缓存失败: ${err.message || err}</div>`;
+        if (bodyEl) {
+            bodyEl.innerHTML = `<div class="star-ss-error">❌ 读取缓存失败: ${escapeHtml(err?.message || err)}</div>`;
+        }
         Logger.error('截图设置: 读取缓存失败', err);
     }
 }
 
 /**
  * 显示图片预览弹窗
+ * （导出供 tests/browser-regression.mjs 验证「关闭后不残留 keydown 监听」）
  */
-function showImagePreviewModal(dataUrl, imgUrl) {
+export function showImagePreviewModal(dataUrl, imgUrl) {
+    // 重复打开时走完整清理，避免上一份的 keydown 监听永久残留
     const existing = document.getElementById('star-img-preview-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        if (typeof existing._starClose === 'function') existing._starClose();
+        existing.remove();
+    }
 
     const overlay = document.createElement('div');
     overlay.id = 'star-img-preview-overlay';
@@ -1246,32 +1216,37 @@ function showImagePreviewModal(dataUrl, imgUrl) {
 
     dialog.innerHTML = `
         <div class="star-img-preview-header">
-            <div class="star-img-preview-title">📷 ${fname}</div>
+            <div class="star-img-preview-title">📷 ${escapeHtml(fname)}</div>
             <div class="star-img-preview-close-btn"><i class="fa-solid fa-xmark"></i></div>
         </div>
         <div class="star-img-preview-body">
-            <img src="${dataUrl}" alt="${fname}" style="max-width:100%;max-height:70vh;object-fit:contain;" />
+            <img src="${dataUrl}" alt="${escapeHtml(fname)}" class="star-img-preview-img" />
         </div>
     `;
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
     const closeOverlay = () => {
+        // Esc 监听必须在这里统一摘除：此前只在「按 Esc」那条分支里摘，
+        // 用 X 或点遮罩关闭时监听器会永久留在 document 上（开一次泄漏一个）。
+        document.removeEventListener('keydown', onEsc);
+        overlay._starClose = null;
         overlay.classList.remove('visible');
         setTimeout(() => overlay.remove(), 300);
     };
+    overlay._starClose = closeOverlay;
 
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) closeOverlay();
     });
     dialog.querySelector('.star-img-preview-close-btn').addEventListener('click', closeOverlay);
 
-    document.addEventListener('keydown', function onEsc(e) {
+    function onEsc(e) {
         if (e.key === 'Escape') {
-            document.removeEventListener('keydown', onEsc);
             closeOverlay();
         }
-    });
+    }
+    document.addEventListener('keydown', onEsc);
 
     requestAnimationFrame(() => overlay.classList.add('visible'));
 }

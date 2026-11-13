@@ -7,6 +7,8 @@ import { showTextModal, showConfirmModal } from './components.js';
 import Logger from '../Logger.js';
 import { toggleDebugPanel } from './debug.js';
 import { showMigrationDialog } from './migration.js';
+import { getSkin, SKINS } from './theme.js';
+import { openAppearanceSettingsPopup, getCurrentBackgroundName } from './appearance.js';
 import {
     getFontCacheStats,
     deleteFontCacheEntries,
@@ -89,6 +91,8 @@ export function showAvatarLongPressMenu() {
     const currentContextRange = getSetting('contextViewRange');
     const currentItemsPerPage = getSetting('itemsPerPage');
     const debugEnabled = state.debugPanel.enabled;
+    const skinLabel = getSkin() === SKINS.GALGAME ? 'Galgame' : '经典';
+    const hasBackground = !!getCurrentBackgroundName();
 
     menuDialog.innerHTML = `
         <div class="star-options-menu-header">
@@ -106,6 +110,11 @@ export function showAvatarLongPressMenu() {
                 <i class="fa-solid fa-list-ol star-options-item-icon"></i>
                 <span class="star-options-item-label">每页收藏数</span>
                 <span class="star-options-item-value">${currentItemsPerPage} 条</span>
+            </div>
+            <div class="star-options-menu-item" data-action="appearance-settings">
+                <i class="fa-solid fa-palette star-options-item-icon"></i>
+                <span class="star-options-item-label">外观与背景</span>
+                <span class="star-options-item-value">${skinLabel}${hasBackground ? ' · 已设背景' : ''}</span>
             </div>
             <div class="star-options-group-label">功能</div>
             <div class="star-options-menu-item" data-action="screenshot-settings">
@@ -176,6 +185,8 @@ export function showAvatarLongPressMenu() {
             setTimeout(showContextRangeSettingsPopup, 100);
         } else if (action === 'items-per-page-settings') {
             setTimeout(showItemsPerPageSettingsPopup, 100);
+        } else if (action === 'appearance-settings') {
+            setTimeout(openAppearanceSettingsPopup, 100);
         } else if (action === 'toggle-debug-panel') {
             setTimeout(toggleDebugPanel, 100);
         } else if (action === 'data-migration') {

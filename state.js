@@ -16,7 +16,7 @@ export const PLUGIN_NAME = 'star';
 
 // 版本号兜底值（必须与 manifest.json 的 version 一致，由 scripts/check-version.mjs 校验）。
 // 运行时由 loadLocalVersion() 用 manifest.json 的值覆盖，避免「四处手工同步版本号」。
-export let LOCAL_VERSION = '2.3.2';
+export let LOCAL_VERSION = '2.4.0';
 
 // ==================== 设置项 schema ====================
 // 新增/重命名设置项只需改这里 + getSetting/setSetting 的调用点。
@@ -24,6 +24,7 @@ export let LOCAL_VERSION = '2.3.2';
 export const SETTINGS = {
     // 外观
     theme: { default: 'light' },    // 收藏面板
+    themeSkin: { default: 'classic' },  // 界面风格：classic（经典）| galgame（赛璐璐玻璃）
     itemsPerPage: { default: 10 },
     // 上下文查看
     contextViewRange: { default: 1 },

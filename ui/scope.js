@@ -16,6 +16,7 @@ export const STAR_UI_SCOPE = [
     '#star-qa-restore-btn',       // AI 答疑最小化后的恢复按钮
     '#star-debug-modal',          // 调试日志面板
     '#star-ss-settings-overlay',  // 截图设置弹窗
+    '#star-bg-settings-overlay',  // 外观与背景设置弹窗
     '#star-character-switcher',   // 角色切换器
     '#star-guide-dialog',         // 使用指南
     '#star-screenshot-popup',     // 截图选择弹窗

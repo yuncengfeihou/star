@@ -23,6 +23,7 @@ import {
 import { setCoreHooks, registerCanceller } from '../hooks.js';
 import { showAvatarLongPressMenu, closeAvatarLongPressMenu } from './settings.js';
 import { applySavedTheme, isDarkTheme, toggleThemeAnimated, THEME_CHANGED_EVENT } from './theme.js';
+import { initAppearance, closeAppearanceSettings } from './appearance.js';
 import { openCharacterSwitcher, preloadCharacterFavorites, abortPreload } from './character-switcher.js';
 import { handleViewContext, closeContextFrame, enterPreviewMode } from './preview.js';
 import { renderIframesInElement } from './iframes.js';
@@ -513,6 +514,8 @@ export async function openFavoritesModal() {
     const previewContainer = document.getElementById('favorites-preview-container');
     if (previewContainer) previewContainer.style.display = 'none';
     applySavedTheme();
+    // 背景图存在 IndexedDB 里，懒加载一次；失败按「无背景」处理，不阻塞面板
+    initAppearance().catch(e => Logger.debug('初始化面板背景失败:', e));
 
     const context = getContext();
     if (!state.isPreviewingContext) {
@@ -607,8 +610,9 @@ export function closeFavoritesModal() {
     // 取消后台角色收藏预加载
     abortPreload();
 
-    // 关闭可能残留的标签筛选下拉菜单
+    // 关闭可能残留的标签筛选下拉菜单 / 外观设置浮层
     closeTagFilterMenu();
+    closeAppearanceSettings();
 
     // 关闭设置小菜单：它是独立的 position:fixed 全屏遮罩（z-index 比收藏面板更高），
     // 只关面板会把它留在页面上——用户看到的是一层去不掉的模糊遮罩 + 设置对话框，
@@ -642,6 +646,7 @@ export async function handleEscKey(event) {
         'star-character-switcher',   // 角色切换器（临时创建，自身 capture 监听处理）
         'star-qa-settings-overlay',  // AI 答疑设置浮层（自身捕获 Esc 关闭）
         'star-img-preview-overlay',  // 截图设置里的图片预览（自身监听 Esc）
+        'star-bg-settings-overlay',  // 外观与背景设置浮层（自身捕获 Esc 关闭）
     ];
     const persistentCheck = [
         ['star-qa-modal', el => el.style.display !== 'none'],

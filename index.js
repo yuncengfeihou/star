@@ -23,6 +23,7 @@ import {
 import { initDebugPanel } from './ui/debug.js';
 import { initTooltip } from './ui/tooltip.js';
 import { initA11y } from './ui/a11y.js';
+import { applySavedTheme } from './ui/theme.js';
 import { ensureEntryButton } from './bootstrap/entry-button.js';
 import { setupFloatingButtons } from './bootstrap/floating-buttons.js';
 import { registerShortcuts } from './bootstrap/shortcuts.js';
@@ -78,6 +79,10 @@ jQuery(async () => {
         // 2) 初始化设置（补默认值）与版本号（manifest.json 为唯一事实来源）
         initSettings();
         await loadLocalVersion();
+
+        // 启动即应用已保存的主题与界面风格：主题令牌只声明在 <html> 上，
+        // 独立弹窗（更新公告/迁移）在收藏面板打开前出现时也应拿到正确配色。
+        applySavedTheme();
 
         // 3) 轻量 UI 增强
         initTooltip();

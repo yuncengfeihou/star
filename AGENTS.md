@@ -233,6 +233,17 @@ UI 层通过 `buildVirtualFavorites(messages)`（在 `domain.js`）从消息数�
 
 - **不要**再往具体容器上写 `data-star-theme`：历史上需要在 8 个容器上分别同步，漏一处就是一块颜色不对的补丁；
   且逐容器同步会让「涟漪切换」无法成立——动效要求整屏在同一帧内换成新主题。
+- **界面风格（skin）**：`<html data-star-skin>`（`classic` / `galgame`）由 `ui/theme.js` 的 `applySkin()` 单点写入，
+  与主题一样只声明令牌在根元素。令牌块必须写成 `html[data-star-theme="dark"]`：面板对话框上还镜像着
+  `data-star-theme`（供存量代码读 dataset），写成 `[data-star-theme="dark"]` 会让对话框重新声明整套暗色令牌、
+  把根元素上的 skin 覆盖掉。
+- **启动即应用**：`index.js` 在 `initSettings()` 之后调用 `applySavedTheme()`（主题 + 风格），
+  这样更新公告、数据迁移等独立浮层在收藏面板打开之前也能拿到正确配色。
+- **面板背景图**：入口在设置菜单的「外观与背景」（`ui/appearance.js`）。图片在浏览器内压缩到 1920px 以内后
+  写入 IndexedDB（库 `star-appearance`），通过 `<html style="--star-user-bg:url(...)">` + `data-star-bg="on"`
+  应用到面板；不写 `settings.json`、不上传。IDB 不可用时仅本次会话生效并明确提示。
+  新增顶层浮层时要同步三处：`ui/scope.js`、`ui/main.js` 的 Esc 白名单、`style.css` 的无障碍名单
+  （焦点环 / reduced-motion）。
 - 主题由按钮触发时走 `toggleThemeAnimated(originEl)`：基于 View Transitions API，
   以被点击按钮的「底边中点」为圆心做 `clip-path: circle()` 扩散（从侧栏左下角铺满整个界面）。
   浏览器不支持或用户开启「减少动态效果」时静默降级为瞬时切换。

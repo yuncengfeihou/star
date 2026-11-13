@@ -11,6 +11,46 @@ import { getSetting, setSetting, state } from '../state.js';
 import Logger from '../Logger.js';
 
 const THEME_ATTR = 'data-star-theme';
+const SKIN_ATTR = 'data-star-skin';
+
+/** 可选界面风格。classic = 原淡紫主题；galgame = 赛璐璐 × 柔光玻璃（珊瑚暖纸 / 暗夜玻璃）。 */
+export const SKINS = {
+    CLASSIC: 'classic',
+    GALGAME: 'galgame',
+};
+
+export function normalizeSkin(skin) {
+    return skin === SKINS.GALGAME ? SKINS.GALGAME : SKINS.CLASSIC;
+}
+
+/**
+ * 当前界面风格（以 DOM 属性为准；未应用过时回落到设置项）。
+ */
+export function getSkin() {
+    const fromDom = document.documentElement.getAttribute(SKIN_ATTR);
+    return normalizeSkin(fromDom || getSetting('themeSkin'));
+}
+
+/**
+ * 应用界面风格（单源写入，与主题共用 THEME_CHANGED_EVENT）。
+ * 只改 <html data-star-skin>：所有插件容器的 --star-* 变量都继承自根元素。
+ */
+export function applySkin(skin, { persist = true } = {}) {
+    const normalized = normalizeSkin(skin);
+    document.documentElement.setAttribute(SKIN_ATTR, normalized);
+    if (persist) setSetting('themeSkin', normalized);
+    document.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, {
+        detail: { isDark: isDarkTheme(), skin: normalized },
+    }));
+    return normalized;
+}
+
+/**
+ * 切换界面风格并持久化（供设置页调用）。
+ */
+export function setSkin(skin) {
+    return applySkin(skin, { persist: true });
+}
 
 /** 切换动效进行中挂在 <html> 上的标记：用于冻结面板内的微过渡，避免「同一段动画跑两遍」 */
 export const THEME_SWITCHING_CLASS = 'star-theme-switching';
@@ -62,14 +102,19 @@ export function applyTheme(isDark, { persist = true } = {}) {
 
     // 通知订阅者（侧栏图标等）。放在 startViewTransition 的更新回调里触发时，
     // 这些 DOM 变更会被一并计入「新」快照，因此涟漪揭示的画面与最终状态一致。
-    document.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: { isDark } }));
+    document.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, {
+        detail: { isDark, skin: getSkin() },
+    }));
 }
 
 /**
- * 按已保存的设置回填主题（打开面板/进入预览时调用）。
+ * 按已保存的设置回填主题与界面风格（打开面板/进入预览时调用）。
  * 不播放动效、不写回设置，避免与用户此刻的选择互相覆盖。
  */
 export function applySavedTheme() {
+    // 先写 skin 再写 theme：applyTheme 会派发 THEME_CHANGED_EVENT，
+    // 订阅者读到的应已经是本次要应用的风格。
+    applySkin(getSetting('themeSkin'), { persist: false });
     applyTheme(getSetting('theme') === 'dark', { persist: false });
 }
 

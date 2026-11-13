@@ -96,7 +96,10 @@
 /* ================================================================== */
 
 /* --- 默认 (白天模式) --- */
-:root, [data-star-theme="light"] {
+/* 令牌只声明在根元素：面板对话框上还镜像着 data-star-theme（供存量代码读 dataset），
+   若这里写成 [data-star-theme="dark"]，对话框会重新声明整套暗色令牌，
+   把 <html> 上的 skin 覆盖（galgame 配色失效）。 */
+:root, html[data-star-theme="light"] {
     /* 基础背景 */
     --star-bg-dialog: rgba(255, 255, 255, 1);
     --star-bg-header: rgba(255, 255, 255, 1);
@@ -142,10 +145,15 @@
     --star-role-user-text: rgba(41, 182, 246, 0.35);
     --star-role-user-hover-border: rgba(0, 127, 255, 1);
     --star-role-user-hover-bg: rgba(0, 127, 255, 0.05);
+
+    /* 面板背景图开启时的半透明表面 */
+    --star-panel-veil: rgba(255, 255, 255, 0.82);
+    --star-header-veil: rgba(255, 255, 255, 0.55);
+    --star-sidebar-veil: rgba(255, 255, 255, 0.62);
 }
 
-/* --- 黑夜模式 (仅通过 data-star-theme 属性触发) --- */
-[data-star-theme="dark"] {
+/* --- 黑夜模式 (仅通过根元素的 data-star-theme 属性触发) --- */
+html[data-star-theme="dark"] {
     /* 基础背景 */
     --star-bg-dialog: rgba(30, 30, 30, 1);
     --star-bg-header: transparent;
@@ -189,6 +197,96 @@
     --star-role-user-text: rgba(41, 182, 246, 0.65);
     --star-role-user-hover-border: rgba(179, 216, 255, 1);
     --star-role-user-hover-bg: rgba(45, 47, 50, 0.9);
+
+    /* 面板背景图开启时的半透明表面 */
+    --star-panel-veil: rgba(30, 30, 30, 0.84);
+    --star-header-veil: rgba(30, 30, 30, 0.58);
+    --star-sidebar-veil: rgba(40, 42, 45, 0.55);
+}
+
+/* ================================================================== */
+/* 1.2 GALGAME SKIN (Cel Glow UI)                                      */
+/* ================================================================== */
+/* 视觉参考「邻舍.EXE」的 Cel Glow：赛璐璐动漫质感 × 柔光玻璃。
+   亮色 = 珊瑚暖纸（#f0ece8 底 + 珊瑚橙点睛）；暗色 = 暗夜玻璃（炭紫底 + 珊瑚高亮）。
+   skin 只覆盖 --star-* 语义变量，组件本身无需感知；装饰性规则见文末 GALGAME DECORATION。 */
+html[data-star-skin="galgame"] {
+    --star-bg-dialog: rgba(244, 241, 238, 0.94);
+    --star-bg-header: rgba(255, 253, 250, 0.62);
+    --star-bg-sidebar: rgba(255, 253, 250, 0.58);
+    --star-bg-hover: rgba(224, 123, 108, 0.12);
+    --star-bg-input: rgba(255, 255, 255, 0.86);
+    --star-bg-item: rgba(255, 253, 250, 0.64);
+    --star-bg-code: rgba(74, 61, 54, 0.08);
+    --star-bg-reasoning: rgba(255, 253, 250, 0.8);
+
+    --star-text-main: rgba(51, 48, 45, 1);
+    --star-text-muted: rgba(112, 100, 92, 1);
+    --star-text-sub: rgba(140, 128, 116, 1);
+    --star-text-inverse: rgba(255, 255, 255, 1);
+    /* 珊瑚底属中性亮度：其上用深褐文字保证 ≥ 6:1 对比度，不用白色（约 2.9:1） */
+    --star-text-on-accent: rgba(43, 21, 18, 1);
+    --star-text-deleted: rgba(194, 59, 59, 1);
+
+    --star-border-main: rgba(74, 61, 54, 0.16);
+    --star-border-light: rgba(74, 61, 54, 0.2);
+    --star-border-input: rgba(74, 61, 54, 0.22);
+
+    --star-accent-primary: rgba(224, 123, 108, 0.95);
+    --star-accent-primary-hover: rgba(204, 106, 92, 0.95);
+    --star-bg-switch-btn: rgba(224, 123, 108, 0.14);
+    --star-update-notice-border: rgba(255, 138, 76, 1);
+    --star-update-notice-bg: rgba(255, 138, 76, 0.12);
+
+    --star-role-ai-text: rgba(190, 92, 78, 0.9);
+    --star-role-ai-hover-border: rgba(204, 106, 92, 0.65);
+    --star-role-ai-hover-bg: rgba(224, 123, 108, 0.1);
+    --star-role-user-text: rgba(20, 152, 133, 0.85);
+    --star-role-user-hover-border: rgba(23, 195, 171, 0.75);
+    --star-role-user-hover-bg: rgba(23, 195, 171, 0.1);
+
+    --star-panel-veil: rgba(255, 253, 250, 0.78);
+    --star-header-veil: rgba(255, 253, 250, 0.55);
+    --star-sidebar-veil: rgba(255, 253, 250, 0.5);
+}
+
+html[data-star-skin="galgame"][data-star-theme="dark"] {
+    --star-bg-dialog: rgba(34, 30, 40, 0.94);
+    --star-bg-header: rgba(43, 38, 50, 0.6);
+    --star-bg-sidebar: rgba(34, 30, 40, 0.64);
+    --star-bg-hover: rgba(255, 122, 100, 0.14);
+    --star-bg-input: rgba(43, 38, 50, 0.86);
+    --star-bg-item: rgba(43, 38, 50, 0.6);
+    --star-bg-code: rgba(0, 0, 0, 0.25);
+    --star-bg-reasoning: rgba(43, 38, 50, 0.82);
+
+    --star-text-main: rgba(231, 226, 222, 1);
+    --star-text-muted: rgba(183, 169, 158, 1);
+    --star-text-sub: rgba(143, 133, 147, 1);
+    --star-text-inverse: rgba(22, 19, 26, 1);
+    --star-text-on-accent: rgba(42, 20, 16, 1);
+    --star-text-deleted: rgba(255, 122, 122, 1);
+
+    --star-border-main: rgba(255, 255, 255, 0.1);
+    --star-border-light: rgba(255, 255, 255, 0.14);
+    --star-border-input: rgba(255, 255, 255, 0.16);
+
+    --star-accent-primary: rgba(255, 122, 100, 0.95);
+    --star-accent-primary-hover: rgba(240, 100, 78, 0.95);
+    --star-bg-switch-btn: rgba(255, 122, 100, 0.16);
+    --star-update-notice-border: rgba(255, 179, 92, 1);
+    --star-update-notice-bg: rgba(255, 179, 92, 0.14);
+
+    --star-role-ai-text: rgba(255, 148, 126, 0.9);
+    --star-role-ai-hover-border: rgba(255, 122, 100, 0.65);
+    --star-role-ai-hover-bg: rgba(255, 122, 100, 0.12);
+    --star-role-user-text: rgba(87, 214, 194, 0.8);
+    --star-role-user-hover-border: rgba(87, 214, 194, 0.8);
+    --star-role-user-hover-bg: rgba(87, 214, 194, 0.12);
+
+    --star-panel-veil: rgba(30, 26, 36, 0.82);
+    --star-header-veil: rgba(34, 30, 40, 0.55);
+    --star-sidebar-veil: rgba(30, 26, 36, 0.6);
 }
 
 /* ================================================================== */
@@ -260,6 +358,7 @@ html.star-theme-switching *::after {
 :where(
     #favorites_button, #favoritesModal, #context-messages-frame, #star-qa-modal,
     #star-qa-settings-overlay, #star-qa-restore-btn, #star-debug-modal, #star-ss-settings-overlay,
+    #star-bg-settings-overlay,
     #star-character-switcher, #star-guide-dialog, #star-screenshot-popup, #star-confirm-modal,
     #star-input-modal, #star-text-modal, #star-tags-modal, #star-editor-frame,
     #star-options-menu-overlay, #star-mobile-actions-menu, #star-update-overlay,
@@ -268,6 +367,7 @@ html.star-theme-switching *::after {
 :where(
     #favorites_button, #favoritesModal, #context-messages-frame, #star-qa-modal,
     #star-qa-settings-overlay, #star-qa-restore-btn, #star-debug-modal, #star-ss-settings-overlay,
+    #star-bg-settings-overlay,
     #star-character-switcher, #star-guide-dialog, #star-screenshot-popup, #star-confirm-modal,
     #star-input-modal, #star-text-modal, #star-tags-modal, #star-editor-frame,
     #star-options-menu-overlay, #star-mobile-actions-menu, #star-update-overlay,
@@ -297,6 +397,7 @@ html.star-theme-switching *::after {
     :where(
         #favorites_button, #favoritesModal, #context-messages-frame, #star-qa-modal,
         #star-qa-settings-overlay, #star-qa-restore-btn, #star-debug-modal, #star-ss-settings-overlay,
+    #star-bg-settings-overlay,
         #star-character-switcher, #star-guide-dialog, #star-screenshot-popup, #star-confirm-modal,
         #star-input-modal, #star-text-modal, #star-tags-modal, #star-editor-frame,
         #star-options-menu-overlay, #star-mobile-actions-menu, #star-update-overlay,
@@ -305,6 +406,7 @@ html.star-theme-switching *::after {
     :where(
         #favorites_button, #favoritesModal, #context-messages-frame, #star-qa-modal,
         #star-qa-settings-overlay, #star-qa-restore-btn, #star-debug-modal, #star-ss-settings-overlay,
+    #star-bg-settings-overlay,
         #star-character-switcher, #star-guide-dialog, #star-screenshot-popup, #star-confirm-modal,
         #star-input-modal, #star-text-modal, #star-tags-modal, #star-editor-frame,
         #star-options-menu-overlay, #star-mobile-actions-menu, #star-update-overlay,
@@ -3783,4 +3885,286 @@ dialog {
         width: 240px;
         max-width: calc(100vw - 76px);
     }
+}
+
+/* ================================================================== */
+/* 12. GALGAME DECORATION (Cel Glow)                                   */
+/* ================================================================== */
+/* 令牌只负责配色；这里补「赛璐璐」的形态语言：2px 描边、底部硬阴影、
+   珊瑚 / 桃粉 / 橙的三段渐变标题，以及卡片的悬浮反馈。 */
+html[data-star-skin="galgame"] #favoritesModal .favorites-modal-dialog {
+    border: 2px solid var(--star-border-light) !important;
+    background-image:
+        radial-gradient(ellipse at 12% 0%, rgba(224, 123, 108, 0.2), transparent 55%),
+        radial-gradient(ellipse at 88% 100%, rgba(23, 195, 171, 0.14), transparent 55%) !important;
+    box-shadow:
+        0 6px 0 rgba(74, 61, 54, 0.14),
+        0 24px 64px rgba(42, 28, 24, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.65) !important;
+    backdrop-filter: blur(18px) saturate(1.08);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+html[data-star-skin="galgame"][data-star-theme="dark"] #favoritesModal .favorites-modal-dialog {
+    background-image:
+        radial-gradient(ellipse at 12% 0%, rgba(255, 122, 100, 0.16), transparent 55%),
+        radial-gradient(ellipse at 88% 100%, rgba(124, 106, 245, 0.16), transparent 55%) !important;
+    box-shadow:
+        0 6px 0 rgba(0, 0, 0, 0.4),
+        0 24px 64px rgba(0, 0, 0, 0.55),
+        inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+}
+html[data-star-skin="galgame"] #favoritesModal .favorites-modal-header {
+    border-bottom: 2px solid var(--star-border-light) !important;
+    background-image: linear-gradient(90deg, rgba(224, 123, 108, 0.14), rgba(246, 95, 164, 0.08) 55%, rgba(255, 138, 76, 0.12)) !important;
+}
+html[data-star-skin="galgame"][data-star-theme="dark"] #favoritesModal .favorites-modal-header {
+    background-image: linear-gradient(90deg, rgba(255, 122, 100, 0.14), rgba(255, 123, 171, 0.08) 55%, rgba(255, 179, 92, 0.1)) !important;
+}
+html[data-star-skin="galgame"] #favoritesModal .favorites-modal-title {
+    background: linear-gradient(120deg, #e07b6c 0%, #f65fa4 52%, #ff8a4c 100%) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+}
+html[data-star-skin="galgame"][data-star-theme="dark"] #favoritesModal .favorites-modal-title {
+    background: linear-gradient(120deg, #ff7a64 0%, #ff7bab 52%, #ffb35c 100%) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+}
+html[data-star-skin="galgame"] #favoritesModal .favorite-item {
+    border-width: 2px !important;
+    box-shadow: var(--star-shadow-1);
+    transition: var(--star-transition-hover);
+}
+html[data-star-skin="galgame"] #favoritesModal .favorite-item:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--star-shadow-2);
+}
+html[data-star-skin="galgame"] #favoritesModal .favorites-chat-list-item.active {
+    border: 1px solid var(--star-accent-primary) !important;
+    box-shadow: var(--star-shadow-1);
+}
+
+/* ================================================================== */
+/* 13. USER BACKGROUND (面板背景图)                                     */
+/* ================================================================== */
+/* 背景图写在 <html style="--star-user-bg:url(data:...)"> 上（ui/appearance.js）。
+   图片作为对话框的 ::before 铺满并裁到圆角内；表面改用半透明 veil，
+   保证任何图片下文字仍可读。header / body 需显式抬到图片层之上。 */
+html[data-star-bg="on"] #favoritesModal .favorites-modal-dialog {
+    background-color: var(--star-panel-veil) !important;
+    backdrop-filter: blur(16px) saturate(1.08);
+    -webkit-backdrop-filter: blur(16px) saturate(1.08);
+}
+html[data-star-bg="on"] #favoritesModal .favorites-modal-dialog::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: var(--star-user-bg);
+    background-size: cover;
+    background-position: center;
+    pointer-events: none;
+    /* 不设 z-index：作为首个定位子元素自然落在 header/body（均抬到 content 层）之下 */
+}
+html[data-star-bg="on"] #favoritesModal .favorites-modal-header,
+html[data-star-bg="on"] #favoritesModal .favorites-modal-body,
+html[data-star-bg="on"] #favorites_update_notice,
+html[data-star-bg="on"] #favoritesModal .favorites-main-panel {
+    position: relative;
+    z-index: var(--star-z-content);
+}
+html[data-star-bg="on"] #favoritesModal .favorites-modal-header {
+    background-color: var(--star-header-veil) !important;
+    background-image: none !important;
+}
+html[data-star-bg="on"] #favoritesModal .favorites-chat-list-panel {
+    background-color: var(--star-sidebar-veil) !important;
+}
+
+/* ================================================================== */
+/* 14. APPEARANCE SETTINGS (外观与背景)                                 */
+/* ================================================================== */
+#star-bg-settings-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--star-z-utility);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--star-space-4);
+    background-color: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    transition: opacity var(--star-dur-slow) ease;
+}
+#star-bg-settings-overlay.visible { opacity: 1; }
+#star-bg-settings-overlay .star-bg-settings-dialog {
+    width: 520px;
+    max-width: 94vw;
+    max-height: 88vh;
+    overflow-y: auto;
+    background-color: var(--star-bg-dialog);
+    color: var(--star-text-main);
+    border: 1px solid var(--star-border-main);
+    border-radius: var(--star-radius-lg);
+    box-shadow: var(--star-shadow-3);
+    scrollbar-width: thin;
+    scrollbar-color: var(--star-border-input) transparent;
+}
+html[data-star-skin="galgame"] #star-bg-settings-overlay .star-bg-settings-dialog {
+    border: 2px solid var(--star-border-light);
+    background-image:
+        radial-gradient(ellipse at 12% 0%, rgba(224, 123, 108, 0.16), transparent 55%),
+        radial-gradient(ellipse at 88% 100%, rgba(23, 195, 171, 0.1), transparent 55%);
+    box-shadow:
+        0 6px 0 rgba(74, 61, 54, 0.14),
+        0 24px 64px rgba(42, 28, 24, 0.28) !important;
+}
+#star-bg-settings-overlay .star-bg-settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--star-space-3) var(--star-space-5);
+    border-bottom: 1px solid var(--star-border-main);
+}
+#star-bg-settings-overlay .star-bg-settings-title {
+    display: flex;
+    align-items: center;
+    gap: var(--star-space-2);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--star-text-main);
+}
+#star-bg-settings-overlay .star-bg-settings-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--star-radius-sm);
+    color: var(--star-text-sub);
+    cursor: pointer;
+    transition: var(--star-transition-hover);
+}
+#star-bg-settings-overlay .star-bg-settings-close:hover {
+    background-color: var(--star-bg-hover);
+    color: var(--star-text-main);
+}
+#star-bg-settings-overlay .star-bg-settings-body {
+    padding: var(--star-space-4) var(--star-space-5) var(--star-space-5);
+}
+#star-bg-settings-overlay .star-bg-section-title {
+    margin: var(--star-space-4) 0 var(--star-space-3);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--star-text-main);
+}
+#star-bg-settings-overlay .star-bg-section-title:first-child { margin-top: 0; }
+#star-bg-settings-overlay .star-bg-skin-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--star-space-3);
+}
+#star-bg-settings-overlay .star-bg-skin-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--star-space-1);
+    padding: var(--star-space-3) var(--star-space-4) !important;
+    border: 2px solid var(--star-border-main) !important;
+    border-radius: var(--star-radius-md) !important;
+    background-color: var(--star-bg-item) !important;
+    color: var(--star-text-main) !important;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit !important;
+    transition: var(--star-transition-hover);
+}
+#star-bg-settings-overlay .star-bg-skin-btn:hover {
+    border-color: var(--star-accent-primary-hover) !important;
+}
+#star-bg-settings-overlay .star-bg-skin-btn.active {
+    border-color: var(--star-accent-primary) !important;
+    background-color: var(--star-bg-switch-btn) !important;
+    box-shadow: var(--star-shadow-1);
+}
+#star-bg-settings-overlay .star-bg-skin-btn i {
+    font-size: 16px;
+    color: var(--star-accent-primary-hover);
+}
+#star-bg-settings-overlay .star-bg-skin-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+#star-bg-settings-overlay .star-bg-skin-desc {
+    font-size: 12px;
+    color: var(--star-text-sub) !important;
+}
+#star-bg-settings-overlay .star-bg-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 150px;
+    overflow: hidden;
+    border: 1px dashed var(--star-border-input);
+    border-radius: var(--star-radius-md);
+    background-color: var(--star-bg-item);
+}
+#star-bg-settings-overlay .star-bg-preview.has-image { border-style: solid; }
+#star-bg-settings-overlay .star-bg-preview-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+#star-bg-settings-overlay .star-bg-preview-empty {
+    display: flex;
+    align-items: center;
+    gap: var(--star-space-2);
+    font-size: 13px;
+    color: var(--star-text-sub);
+}
+#star-bg-settings-overlay .star-bg-current-name {
+    min-height: 16px;
+    margin-top: var(--star-space-2);
+    font-size: 12px;
+    color: var(--star-text-sub);
+    word-break: break-all;
+}
+#star-bg-settings-overlay .star-bg-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--star-space-2);
+    margin-top: var(--star-space-3);
+}
+#star-bg-settings-overlay .star-bg-actions .menu_button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--star-space-2) var(--star-space-4) !important;
+    border: 1px solid var(--star-border-input) !important;
+    border-radius: var(--star-radius-sm) !important;
+    background-color: var(--star-bg-input) !important;
+    color: var(--star-text-main) !important;
+    font-size: 13px !important;
+    font-family: inherit !important;
+    cursor: pointer;
+    transition: var(--star-transition-hover);
+}
+#star-bg-settings-overlay .star-bg-actions .menu_button:hover {
+    border-color: var(--star-accent-primary) !important;
+    background-color: var(--star-bg-hover) !important;
+}
+#star-bg-settings-overlay .star-bg-actions .menu_button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+#star-bg-settings-overlay .star-bg-hint {
+    margin: var(--star-space-3) 0 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--star-text-sub);
+}
+@media (max-width: 600px) {
+    #star-bg-settings-overlay .star-bg-skin-row { grid-template-columns: 1fr; }
 }
